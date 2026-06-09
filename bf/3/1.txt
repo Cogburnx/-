@@ -1,0 +1,406 @@
+#include <LovyanGFX.hpp>
+#include <TJpg_Decoder.h>
+#include <HardwareSerial.h>
+#include <esp_heap_caps.h>
+
+// ========== 屏幕引脚 ==========
+#define PIN_SCK  12
+#define PIN_SDA  11
+#define PIN_CS   10
+#define PIN_DC   9
+#define PIN_RST  8
+
+// ========== 摇杆引脚 ==========
+#define PIN_VRX  4
+#define PIN_VRY  5
+#define PIN_SW   6
+
+// ========== 摄像头串口引脚 ==========
+#define CAM_RX   17
+#define CAM_TX   16
+
+// ---------- 屏幕驱动 ----------
+class LGFX : public lgfx::LGFX_Device {
+  lgfx::Panel_ST7789 panel;
+  lgfx::Bus_SPI bus;
+public:
+  LGFX() {
+    auto b = bus.config();
+    b.spi_host = SPI2_HOST;
+    b.freq_write = 40000000;
+    b.pin_sclk = PIN_SCK;
+    b.pin_mosi = PIN_SDA;
+    b.pin_dc   = PIN_DC;
+    bus.config(b);
+    panel.setBus(&bus);
+
+    auto p = panel.config();
+    p.pin_cs   = PIN_CS;
+    p.pin_rst  = PIN_RST;
+    p.panel_width  = 240;
+    p.panel_height = 320;
+    p.memory_width = 240;
+    p.memory_height= 320;
+    p.rgb_order = false;
+    p.invert = false;     
+    panel.config(p);
+    setPanel(&panel);
+  }
+};
+
+LGFX tft;
+LGFX_Sprite sprite(&tft);
+HardwareSerial SerialCam(1);
+
+// ========== UI 状态 ==========
+enum UIState { HOME, MENU, CAMERA };
+UIState currentState = HOME;
+
+int selectedIndex = 0;
+const int totalItems = 6;
+const int cols = 3;
+const int rows = 2;
+
+unsigned long lastMoveTime = 0;
+const unsigned long moveDelay = 200;
+const int joyThreshold = 800;
+unsigned long lastBtnTime = 0;
+const unsigned long btnDelay = 300;
+int lastSWState = HIGH;
+bool screenDirty = true;
+
+// ========== 菜单布局（横屏 320x240）==========
+const int boxW = 90;
+const int boxH = 70;
+const int boxGapX = 12;
+const int boxGapY = 20;
+const int boxesTotalWidth = (boxW * cols) + (boxGapX * (cols - 1));
+const int startX = (320 - boxesTotalWidth) / 2;
+const int boxesTotalHeight = (boxH * rows) + boxGapY;
+const int startY = (240 - boxesTotalHeight) / 2;
+
+const char* menuTexts[] = { "搜索", "拍摄", "存储", "语文", "英语", "对话" };
+
+// ========== 摄像头相关变量 ==========
+#define MAX_SIZE 30000
+uint8_t buf[MAX_SIZE];
+enum { WAIT_SOF, WAIT_LEN, WAIT_DATA, WAIT_EOF } state = WAIT_SOF;
+uint8_t sof = 0, eof = 0;
+uint8_t lenBuf[4];
+uint32_t len = 0, idx = 0;
+bool ready = false;
+uint16_t* img_rgb565 = nullptr;
+uint16_t jpg_width = 0, jpg_height = 0;
+
+#define SWAP_BYTES true
+#define FULLSCREEN_CROP false
+
+// ========== 长按退出拍摄（5秒）==========
+unsigned long pressStartTime = 0;
+bool isPressing = false;
+
+// ---------- 函数声明 ----------
+void drawHome();
+void drawMenu();
+void readJoystick();
+bool isSWPressed();          // 返回按钮是否被按下（不带长按逻辑，仅检测物理电平）
+bool isSWLongPressed();      // 检测长按5秒
+void handleCamera();
+bool tft_output(int16_t x, int16_t y, uint16_t w, uint16_t h, uint16_t* bitmap);
+void draw_scaled_image(uint16_t* src, int src_w, int src_h, int dst_x, int dst_y, int dst_w, int dst_h);
+void process(uint8_t b);
+
+// ========== 摄像头回调（填充 img_rgb565）==========
+bool tft_output(int16_t x, int16_t y, uint16_t w, uint16_t h, uint16_t* bitmap) {
+  if (!img_rgb565) return true;
+  for (uint16_t row = 0; row < h; row++) {
+    memcpy(img_rgb565 + (y + row) * jpg_width + x,
+           bitmap + row * w,
+           w * sizeof(uint16_t));
+  }
+  return true;
+}
+
+// ========== 图像缩放显示 ==========
+void draw_scaled_image(uint16_t* src, int src_w, int src_h, int dst_x, int dst_y, int dst_w, int dst_h) {
+  if (dst_w <= 0 || dst_h <= 0) return;
+  tft.startWrite();
+  uint16_t* line_buf = (uint16_t*)malloc(dst_w * sizeof(uint16_t));
+  if (!line_buf) return;
+  int* y_map = (int*)malloc(dst_h * sizeof(int));
+  if (!y_map) {
+    free(line_buf);
+    return;
+  }
+  for (int dy = 0; dy < dst_h; dy++) y_map[dy] = (dy * src_h) / dst_h;
+  for (int dy = 0; dy < dst_h; dy++) {
+    uint16_t* src_row = src + y_map[dy] * src_w;
+    for (int dx = 0; dx < dst_w; dx++) {
+      int src_x = (dx * src_w) / dst_w;
+      line_buf[dx] = src_row[src_x];
+    }
+    tft.pushImage(dst_x, dst_y + dy, dst_w, 1, line_buf);
+  }
+  free(y_map);
+  free(line_buf);
+  tft.endWrite();
+}
+
+// ========== 串口数据解析（摄像头协议）==========
+void process(uint8_t b) {
+  switch (state) {
+    case WAIT_SOF:
+      if (b == 0xAA) sof++;
+      else if (sof == 3 && b == 0x01) {
+        state = WAIT_LEN;
+        sof = 0; idx = 0;
+      } else sof = 0;
+      break;
+    case WAIT_LEN:
+      lenBuf[idx++] = b;
+      if (idx == 4) {
+        len = (lenBuf[0]<<24)|(lenBuf[1]<<16)|(lenBuf[2]<<8)|lenBuf[3];
+        if (len == 0 || len > MAX_SIZE) state = WAIT_SOF;
+        else { idx = 0; state = WAIT_DATA; }
+      }
+      break;
+    case WAIT_DATA:
+      buf[idx++] = b;
+      if (idx >= len) { state = WAIT_EOF; eof = 0; }
+      break;
+    case WAIT_EOF:
+      if (b == 0xAA) eof++;
+      else if (eof == 3 && b == 0x02) { ready = true; state = WAIT_SOF; }
+      else state = WAIT_SOF;
+      break;
+  }
+}
+
+// ========== 摄像头主处理 ==========
+void handleCamera() {
+  while (SerialCam.available()) {
+    process(SerialCam.read());
+  }
+
+  if (ready) {
+    ready = false;
+    if (TJpgDec.getJpgSize(&jpg_width, &jpg_height, buf, len) != JDR_OK) return;
+
+    size_t buf_size = jpg_width * jpg_height * sizeof(uint16_t);
+    img_rgb565 = (uint16_t*)heap_caps_malloc(buf_size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!img_rgb565) img_rgb565 = (uint16_t*)malloc(buf_size);
+    if (!img_rgb565) return;
+
+    TJpgDec.drawJpg(0, 0, buf, len);
+
+    int screen_w = tft.width();
+    int screen_h = tft.height();
+    int dst_w, dst_h, dst_x, dst_y;
+    if (FULLSCREEN_CROP) {
+      float scale_w = (float)screen_w / jpg_width;
+      float scale_h = (float)screen_h / jpg_height;
+      float scale = (scale_w > scale_h) ? scale_w : scale_h;
+      dst_w = jpg_width * scale;
+      dst_h = jpg_height * scale;
+    } else {
+      float scale_w = (float)screen_w / jpg_width;
+      float scale_h = (float)screen_h / jpg_height;
+      float scale = (scale_w < scale_h) ? scale_w : scale_h;
+      dst_w = jpg_width * scale;
+      dst_h = jpg_height * scale;
+    }
+    dst_x = (screen_w - dst_w) / 2;
+    dst_y = (screen_h - dst_h) / 2;
+
+    draw_scaled_image(img_rgb565, jpg_width, jpg_height, dst_x, dst_y, dst_w, dst_h);
+
+    free(img_rgb565);
+    img_rgb565 = nullptr;
+  }
+}
+
+// ========== 首页绘制 ==========
+void drawHome() {
+  sprite.fillScreen(TFT_BLACK);
+  for (int i = 0; i < 8; i++)
+    sprite.drawCircle(160, 120, 30 + i * 15, sprite.color565(20 + i * 10, 0, 40 - i * 3));
+  sprite.setTextDatum(middle_center);
+  sprite.setTextColor(TFT_WHITE);
+  sprite.setFont(&fonts::FreeSansBold24pt7b);
+  sprite.drawString("chxnb", 160, 100);
+  sprite.fillCircle(160, 150, 4, TFT_GOLD);
+}
+
+// ========== 菜单绘制 ==========
+void drawMenu() {
+  sprite.fillScreen(TFT_BLACK);
+  const uint16_t BOX_COLOR_LIGHT_BLUE = sprite.color565(135, 206, 235);
+  const uint16_t SELECT_COLOR_YELLOW  = sprite.color565(255, 220, 0);
+  const uint16_t TEXT_COLOR_BLACK     = TFT_BLACK;
+  const uint16_t BORDER_WHITE         = TFT_WHITE;
+  sprite.setFont(&fonts::efontCN_16);   // 需要中文字体，若没有可改为其他字体
+
+  for (int i = 0; i < totalItems; i++) {
+    int col = i % cols;
+    int row = i / cols;
+    int x = startX + col * (boxW + boxGapX);
+    int y = startY + row * (boxH + boxGapY);
+
+    if (i == selectedIndex) {
+      sprite.fillRoundRect(x, y, boxW, boxH, 8, SELECT_COLOR_YELLOW);
+      sprite.drawRoundRect(x - 2, y - 2, boxW + 4, boxH + 4, 10, sprite.color565(255,200,0));
+      sprite.drawRoundRect(x - 4, y - 4, boxW + 8, boxH + 8, 12, sprite.color565(255,180,0));
+      sprite.drawRoundRect(x - 6, y - 6, boxW +12, boxH +12, 14, sprite.color565(255,160,0));
+      sprite.drawRoundRect(x - 8, y - 8, boxW +16, boxH +16, 16, sprite.color565(255,140,0));
+      sprite.drawRoundRect(x, y, boxW, boxH, 8, BORDER_WHITE);
+    } else {
+      sprite.fillRoundRect(x, y, boxW, boxH, 8, BOX_COLOR_LIGHT_BLUE);
+      sprite.drawRoundRect(x, y, boxW, boxH, 8, BORDER_WHITE);
+    }
+    sprite.setTextDatum(middle_center);
+    sprite.setTextColor(TEXT_COLOR_BLACK);
+    sprite.drawString(menuTexts[i], x + boxW/2, y + boxH/2);
+  }
+}
+
+// ========== 摇杆方向读取（用于菜单）==========
+void readJoystick() {
+  if (millis() - lastMoveTime < moveDelay) return;
+  int vrx = analogRead(PIN_VRX);
+  int vry = analogRead(PIN_VRY);
+  int col = selectedIndex % cols;
+  int row = selectedIndex / cols;
+  bool moved = false;
+
+  if (vrx < 2048 - joyThreshold) { col = (col - 1 + cols) % cols; moved = true; }
+  else if (vrx > 2048 + joyThreshold) { col = (col + 1) % cols; moved = true; }
+  if (vry < 2048 - joyThreshold) { row = (row - 1 + rows) % rows; moved = true; }
+  else if (vry > 2048 + joyThreshold) { row = (row + 1) % rows; moved = true; }
+
+  if (moved) {
+    selectedIndex = row * cols + col;
+    lastMoveTime = millis();
+    screenDirty = true;
+  }
+}
+
+// ========== 按钮按下检测（原始电平，消抖）==========
+bool isSWPressed() {
+  int reading = digitalRead(PIN_SW);
+  if (reading == LOW && lastSWState == HIGH) {
+    if (millis() - lastBtnTime > btnDelay) {
+      lastBtnTime = millis();
+      lastSWState = LOW;
+      return true;
+    }
+  }
+  if (reading == HIGH) lastSWState = HIGH;
+  return false;
+}
+
+// ========== 长按检测（用于退出拍摄）==========
+bool isSWLongPressed() {
+  static bool lastButtonState = HIGH;
+  bool currentState = digitalRead(PIN_SW);
+  bool longPressTriggered = false;
+
+  // 记录按下起始时间
+  if (lastButtonState == HIGH && currentState == LOW) {
+    // 刚刚按下
+    pressStartTime = millis();
+    isPressing = true;
+  }
+  else if (lastButtonState == LOW && currentState == HIGH) {
+    // 松开
+    isPressing = false;
+  }
+
+  // 检测是否长按达到5秒
+  if (isPressing && (millis() - pressStartTime >= 5000)) {
+    longPressTriggered = true;
+    isPressing = false;  // 防止重复触发
+  }
+
+  lastButtonState = currentState;
+  return longPressTriggered;
+}
+
+// ========== 初始化 ==========
+void setup() {
+  Serial.begin(115200);
+  pinMode(PIN_SW, INPUT_PULLUP);
+  analogReadResolution(12);
+
+  tft.init();
+  tft.setRotation(1);        // 横屏，宽320高240
+  tft.setColorDepth(16);
+  tft.fillScreen(TFT_BLACK);
+
+  sprite.setColorDepth(16);
+  sprite.createSprite(tft.width(), tft.height());
+
+  SerialCam.begin(115200, SERIAL_8N1, CAM_RX, CAM_TX);
+  TJpgDec.setCallback(tft_output);
+  TJpgDec.setSwapBytes(SWAP_BYTES);
+
+  drawHome();
+  sprite.pushSprite(0, 0);
+}
+
+// ========== 主循环 ==========
+void loop() {
+  // 按钮短按处理（仅用于 HOME 和 MENU 状态切换）
+  // 注意：在 CAMERA 状态下，我们不处理短按，只处理长按退出
+  if (currentState != CAMERA && isSWPressed()) {
+    if (currentState == HOME) {
+      currentState = MENU;
+      selectedIndex = 0;
+      screenDirty = true;
+    } 
+    else if (currentState == MENU) {
+      if (selectedIndex == 1) {   // “拍摄”项
+        currentState = CAMERA;
+        tft.fillScreen(TFT_BLACK);
+        // 重置摄像头解析状态机
+        state = WAIT_SOF;
+        sof = eof = idx = 0;
+        ready = false;
+        // 重置长按变量
+        isPressing = false;
+        pressStartTime = 0;
+      } else {
+        currentState = HOME;
+        screenDirty = true;
+      }
+    }
+  }
+
+  // 根据当前状态执行不同逻辑
+  if (currentState == MENU) {
+    readJoystick();
+  }
+  else if (currentState == CAMERA) {
+    handleCamera();                     // 更新显示
+    if (isSWLongPressed()) {            // 长按5秒退出
+      currentState = MENU;
+      screenDirty = true;
+      // 清空串口缓冲，重置状态机
+      while (SerialCam.available()) SerialCam.read();
+      state = WAIT_SOF;
+      sof = eof = idx = 0;
+      ready = false;
+    }
+    delay(1);
+    return;     // 跳过下面 sprite 推屏
+  }
+
+  // HOME 或 MENU 状态使用 sprite 绘图
+  if (screenDirty) {
+    if (currentState == HOME) drawHome();
+    else if (currentState == MENU) drawMenu();
+    sprite.pushSprite(0, 0);
+    screenDirty = false;
+  }
+
+  delay(10);
+}

@@ -1,0 +1,57 @@
+主控：eso32-s3
+esp32s3 dev module
+摄像头：esp32-cam
+AI Thinker ESP32-CAM
+屏幕型号：ST7789V 2.4寸 240x320
+屏幕具体型号：GMT028-05, U1.1
+ST7789
+
+SCK  -> GPIO12
+SDA  -> GPIO11
+CS   -> GPIO10
+DC   -> GPIO9
+RST  -> GPIO8
+
+
+TF卡
+
+CLK-GPIO18
+MISO-GPIO19
+MOSI-GPIO14
+CS-GPIO13
+
+
+摇杆
+VRX -> GPIO4
+VRY -> GPIO5
+SW  -> GPIO6
+电源接3.3v。。。靠
+
+安装的库：
+1. TFT_eSPI
+ST7789驱动
+画线
+画圆
+图片显示
+中文字体支持
+后面 LVGL 也能配合
+2. U8g2
+中文字体
+GB2312字体
+UTF8支持
+3. TJpg_Decoder
+以后相册功能要用
+4. PNGdec
+以后菜单图标会很好用
+5. LittleFS
+一般不用安装，代替 W25Q16
+6.LovyanGFX（ds）
+
+cam:
+u0t-rxd
+u0r-txd
+gnd和io0短接
+烧代码的时候按RST...
+烧完后接s3并且拔掉短接器
+15-17
+手动选择
