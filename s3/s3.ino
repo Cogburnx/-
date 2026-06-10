@@ -62,7 +62,7 @@ LGFX_Sprite sprite(&tft);
 HardwareSerial SerialCam(1);
 
 // ========== UI 状态 ==========
-enum UIState { HOME, MENU, CAMERA };
+enum UIState { HOME, MENU, CAMERA, STORAGE };  // NEW: 新增 STORAGE 状态
 UIState currentState = HOME;
 
 int selectedIndex = 0;
@@ -77,6 +77,21 @@ unsigned long lastBtnTime = 0;
 const unsigned long btnDelay = 300;
 int lastSWState = HIGH;
 bool screenDirty = true;
+
+// ========== 文件浏览相关变量（NEW） ==========
+#define MAX_FILES 50
+#define MAX_DEPTH 5             // NEW: 目录深度限制
+String currentPath = "/";       // NEW: 当前浏览路径
+String fileList[MAX_FILES];
+bool isDir[MAX_FILES];          // NEW: 标记是否为文件夹
+int fileCount = 0;
+int fileSelectedIndex = 0;
+int listScrollOffset = 0;
+bool viewingImage = false;
+
+// 删除确认相关（NEW）
+bool showDeleteConfirm = false;
+int deleteConfirmIndex = -1;
 
 // ========== 菜单布局（横屏 320x240）==========
 const int boxW = 90;
@@ -158,7 +173,7 @@ void startRecording() {
 void stopRecording() {
   if (!isRecording) return;
   if (recordFile) {
-    recordFile.flush();  // 确保所有数据写入SD卡
+    recordFile.flush();
     recordFile.close();
     Serial.printf("停止录像，共录 %u 帧，时长 %.2f 秒\n", 
                   recordedFrames, (millis() - recordStartTime) / 1000.0);
@@ -177,7 +192,6 @@ void recordFrame(uint8_t* data, uint32_t length) {
   size_t written = recordFile.write(data, length);
   if (written == length) {
     recordedFrames++;
-    // 每30帧打印一次，避免刷屏
     if (recordedFrames % 30 == 0) {
       Serial.printf("录像中... 已录 %u 帧\n", recordedFrames);
     }
@@ -275,7 +289,7 @@ void process(uint8_t b) {
   }
 }
 
-// ---------- 摄像头主处理（增强版：显示帧校验，flush写入）----------
+// ---------- 摄像头主处理 ----------
 void handleCamera() {
   while (SerialCam.available()) {
     process(SerialCam.read());
@@ -285,20 +299,18 @@ void handleCamera() {
     ready = false;
     frameCount++;
 
-    // 拍照
     if (captureRequest) {
       captureRequest = false;
       savePhotoToSD(buf, len);
       Serial.printf("拍照: 帧大小 %u 字节\n", len);
     }
 
-    // 录像：写入帧并立即 flush（降低缓存风险）
     if (isRecording) {
       if (recordFile) {
         size_t written = recordFile.write(buf, len);
         if (written == len) {
           recordedFrames++;
-          recordFile.flush();   // 强制写入SD卡，避免断电丢帧
+          recordFile.flush();
           if (recordedFrames % 10 == 0) {
             Serial.printf("录像中... 已录 %u 帧, 最新帧大小 %u\n", recordedFrames, len);
           }
@@ -311,7 +323,6 @@ void handleCamera() {
       }
     }
 
-    // 解码并显示
     if (TJpgDec.getJpgSize(&jpg_width, &jpg_height, buf, len) == JDR_OK) {
       size_t buf_size = jpg_width * jpg_height * sizeof(uint16_t);
       img_rgb565 = (uint16_t*)heap_caps_malloc(buf_size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
@@ -329,14 +340,12 @@ void handleCamera() {
         int dst_y = (screen_h - dst_h) / 2;
         draw_scaled_image(img_rgb565, jpg_width, jpg_height, dst_x, dst_y, dst_w, dst_h);
 
-        // 显示录像状态和帧校验
         if (isRecording) {
           tft.fillCircle(tft.width() - 10, 10, 6, TFT_RED);
           tft.setTextColor(TFT_WHITE, TFT_BLACK);
           tft.setTextSize(1);
           tft.setCursor(5, tft.height() - 10);
           tft.printf("REC %u", recordedFrames);
-          // 显示当前帧的简单校验（用于判断画面是否变化）
           uint8_t hash = 0;
           for (int i = 0; i < 16 && i < len; i++) hash ^= buf[i];
           tft.setCursor(5, tft.height() - 20);
@@ -351,7 +360,6 @@ void handleCamera() {
       }
     }
 
-    // 帧率统计
     unsigned long now = millis();
     if (now - lastFpsPrint >= 1000) {
       uint32_t fps = frameCount - lastFrameCount;
@@ -381,7 +389,7 @@ void drawMenu() {
   const uint16_t SELECT_COLOR_YELLOW  = sprite.color565(255, 220, 0);
   const uint16_t TEXT_COLOR_BLACK     = TFT_BLACK;
   const uint16_t BORDER_WHITE         = TFT_WHITE;
-  sprite.setFont(&fonts::efontCN_16);   // 需要中文字体，若没有可改为其他字体
+  sprite.setFont(&fonts::efontCN_16);   // 需要中文字体
 
   for (int i = 0; i < totalItems; i++) {
     int col = i % cols;
@@ -427,7 +435,7 @@ void readJoystick() {
   }
 }
 
-// ========== 按钮按下检测（短按，用于HOME/MENU）==========
+// ========== 按钮按下检测 ==========
 bool isSWPressed() {
   int reading = digitalRead(PIN_SW);
   if (reading == LOW && lastSWState == HIGH) {
@@ -441,33 +449,29 @@ bool isSWPressed() {
   return false;
 }
 
-// ========== 相机模式下的按钮处理（修复版：长按5秒优先，录像后仍可退出）==========
+// ========== 相机模式下的按钮处理 ==========
 void handleCameraButtons() {
   static unsigned long pressStart = 0;
-  static bool exitDone = false;           // 本次按下是否已执行退出
-  static bool recordToggleDone = false;   // 本次按下是否已执行录像切换
+  static bool exitDone = false;
+  static bool recordToggleDone = false;
   static bool wasPressed = false;
   bool curPressed = (digitalRead(PIN_SW) == LOW);
   unsigned long now = millis();
 
   if (curPressed && !wasPressed) {
-    // 刚按下
     pressStart = now;
     exitDone = false;
     recordToggleDone = false;
     wasPressed = true;
   }
   else if (curPressed && wasPressed) {
-    // 按住过程中，持续检查时长
     unsigned long duration = now - pressStart;
     
-    // 最高优先级：长按5秒退出相机
     if (!exitDone && duration >= 5000) {
       exitDone = true;
       if (isRecording) stopRecording();
       currentState = MENU;
       screenDirty = true;
-      // 清空摄像头缓冲区和状态机
       while (SerialCam.available()) SerialCam.read();
       state = WAIT_SOF;
       sof = eof = idx = 0;
@@ -475,7 +479,6 @@ void handleCameraButtons() {
       captureRequest = false;
       Serial.println("长按5秒退出相机");
     }
-    // 其次：长按2秒切换录像（仅当未退出且未执行过录像切换时）
     else if (!exitDone && !recordToggleDone && duration >= 2000) {
       recordToggleDone = true;
       if (isRecording) {
@@ -488,19 +491,24 @@ void handleCameraButtons() {
     }
   }
   else if (!curPressed && wasPressed) {
-    // 释放按钮
     unsigned long duration = now - pressStart;
     if (!exitDone && !recordToggleDone && duration < 2000) {
-      // 短按拍照
       captureRequest = true;
       Serial.println("拍照请求");
     }
     wasPressed = false;
-    // 重置标志，为下次按下做准备
     exitDone = false;
     recordToggleDone = false;
   }
 }
+
+// ---------- 文件浏览函数声明（NEW）----------
+void scanSD(const char* path);
+void drawFileList();
+void handleStorage();
+void displaySelectedFile(const char* filepath);
+void deleteFile(const char* filepath);
+void drawDeleteConfirm();  // NEW
 
 // ========== 初始化 ==========
 void setup() {
@@ -509,7 +517,7 @@ void setup() {
   analogReadResolution(12);
 
   tft.init();
-  tft.setRotation(1);        // 横屏，宽320高240
+  tft.setRotation(1);
   tft.setColorDepth(16);
   tft.fillScreen(TFT_BLACK);
 
@@ -537,23 +545,35 @@ void setup() {
 
 // ========== 主循环 ==========
 void loop() {
-  if (currentState != CAMERA && isSWPressed()) {
+  if (currentState != CAMERA && currentState != STORAGE && isSWPressed()) { // MOD: 排除STORAGE
     if (currentState == HOME) {
       currentState = MENU;
       selectedIndex = 0;
       screenDirty = true;
     } 
     else if (currentState == MENU) {
-      if (selectedIndex == 1) {   // “拍摄”项
+      if (selectedIndex == 1) {   // “拍摄”
         currentState = CAMERA;
         tft.fillScreen(TFT_BLACK);
-        // 重置摄像头解析状态机
         state = WAIT_SOF;
         sof = eof = idx = 0;
         ready = false;
         captureRequest = false;
         if (isRecording) stopRecording();
-      } else {
+      }
+      // ---------- NEW: 处理“存储” ----------
+      else if (selectedIndex == 2) {
+        currentState = STORAGE;
+        currentPath = "/";             // NEW: 重置路径
+        scanSD(currentPath.c_str());   // MOD: 传入路径
+        fileSelectedIndex = 0;
+        listScrollOffset = 0;
+        viewingImage = false;
+        showDeleteConfirm = false;     // NEW
+        screenDirty = true;
+        tft.fillScreen(TFT_BLACK);
+      }
+      else {
         currentState = HOME;
         screenDirty = true;
       }
@@ -561,16 +581,31 @@ void loop() {
   }
 
   if (currentState == MENU) {
-    readJoystick();               // 摇杆控制菜单光标
+    readJoystick();
+  }
+  // ---------- NEW: 处理文件浏览状态 ----------
+  else if (currentState == STORAGE) {
+    handleStorage();
+    if (showDeleteConfirm) {
+      drawDeleteConfirm();
+      sprite.pushSprite(0, 0);
+    } else if (!viewingImage) {
+      if (screenDirty) {
+        drawFileList();
+        sprite.pushSprite(0, 0);
+        screenDirty = false;
+      }
+    }
+    delay(10);
+    return;
   }
   else if (currentState == CAMERA) {
-    handleCameraButtons();        // 处理拍照/录像/退出
-    handleCamera();               // 接收摄像头数据，显示预览，响应拍照/录像请求
+    handleCameraButtons();
+    handleCamera();
     delay(1);
-    return;                       // 相机模式下无需推 sprite
+    return;
   }
 
-  // HOME 或 MENU 状态使用 sprite 绘图
   if (screenDirty) {
     if (currentState == HOME) drawHome();
     else if (currentState == MENU) drawMenu();
@@ -579,4 +614,386 @@ void loop() {
   }
 
   delay(10);
+}
+
+// ---------- 扫描SD卡指定目录（NEW）----------
+void scanSD(const char* path) {
+  fileCount = 0;
+  fileSelectedIndex = 0;
+  listScrollOffset = 0;
+
+  if (!SD.cardType()) {
+    Serial.println("SD卡未初始化，无法扫描");
+    return;
+  }
+
+  File dir = SD.open(path);
+  if (!dir || !dir.isDirectory()) {
+    Serial.printf("无法打开目录: %s\n", path);
+    if (dir) dir.close();
+    return;
+  }
+
+  // 如果不在根目录，添加“..”返回上级
+  String pathStr = String(path);
+  if (pathStr != "/") {
+    fileList[fileCount] = "..";
+    isDir[fileCount] = true;
+    fileCount++;
+  }
+
+  File entry = dir.openNextFile();
+  while (entry && fileCount < MAX_FILES) {
+    String name = entry.name();
+    // 过滤系统隐藏文件
+    if (name.startsWith(".")) {
+      entry.close();
+      entry = dir.openNextFile();
+      continue;
+    }
+
+    if (entry.isDirectory()) {
+      fileList[fileCount] = name;
+      isDir[fileCount] = true;
+      fileCount++;
+    } else if (name.endsWith(".jpg") || name.endsWith(".JPG")) {
+      fileList[fileCount] = name;
+      isDir[fileCount] = false;
+      fileCount++;
+    }
+    entry.close();
+    entry = dir.openNextFile();
+  }
+  dir.close();
+
+  // 排序：文件夹在前，文件在后，各自按名称排序
+  for (int i = 0; i < fileCount - 1; i++) {
+    for (int j = i + 1; j < fileCount; j++) {
+      bool swap = false;
+      if (isDir[i] && !isDir[j]) {
+        swap = false;
+      } else if (!isDir[i] && isDir[j]) {
+        swap = true;
+      } else {
+        if (fileList[i] > fileList[j]) swap = true;
+      }
+      if (swap) {
+        String tmpName = fileList[i];
+        fileList[i] = fileList[j];
+        fileList[j] = tmpName;
+        bool tmpDir = isDir[i];
+        isDir[i] = isDir[j];
+        isDir[j] = tmpDir;
+      }
+    }
+  }
+
+  Serial.printf("扫描 %s : %d 个条目\n", path, fileCount);
+}
+
+// ---------- 绘制文件列表到 sprite（NEW美化版）----------
+void drawFileList() {
+  sprite.fillScreen(TFT_BLACK);
+  sprite.setTextSize(1);
+  sprite.setFont(&fonts::Font2);
+
+  // 显示当前路径
+  sprite.setTextColor(TFT_DARKGREY, TFT_BLACK);
+  sprite.setCursor(5, 5);
+  sprite.print(currentPath);
+
+  if (fileCount == 0) {
+    sprite.setTextDatum(middle_center);
+    sprite.setTextColor(TFT_WHITE);
+    sprite.drawString("No File", tft.width() / 2, tft.height() / 2);
+    return;
+  }
+
+  const int lineHeight = 22;
+  const int listTop = 18;
+  int maxVisible = (tft.height() - listTop) / lineHeight;
+  int startY = listTop + 2;
+
+  for (int i = 0; i < maxVisible; i++) {
+    int idx = listScrollOffset + i;
+    if (idx >= fileCount) break;
+
+    int y = startY + i * lineHeight;
+    bool selected = (idx == fileSelectedIndex);
+
+    if (selected) {
+      // 圆角高亮背景 + 多层发光边框
+      sprite.fillRoundRect(2, y - 1, tft.width() - 4, lineHeight, 6, TFT_YELLOW);
+      sprite.drawRoundRect(0, y - 3, tft.width(), lineHeight + 6, 8, sprite.color565(255, 200, 0));
+      sprite.drawRoundRect(1, y - 2, tft.width() - 2, lineHeight + 4, 7, sprite.color565(255, 180, 0));
+      sprite.drawRoundRect(2, y - 1, tft.width() - 4, lineHeight, 6, TFT_WHITE);
+    }
+
+    String prefix = "";
+    uint16_t textColor;
+    uint16_t bgColor = selected ? TFT_YELLOW : TFT_BLACK;
+
+    if (isDir[idx]) {
+      prefix = "[D] ";
+      textColor = selected ? TFT_BLACK : sprite.color565(100, 200, 255); // 浅蓝
+    } else {
+      textColor = selected ? TFT_BLACK : TFT_LIGHTGREY;
+    }
+
+    String displayName = prefix + fileList[idx];
+    if (displayName.length() > 24) {
+      displayName = displayName.substring(0, 21) + "...";
+    }
+
+    sprite.setTextColor(textColor, bgColor);
+    sprite.setCursor(8, y + 4);
+    sprite.print(displayName);
+  }
+}
+
+// ---------- 删除确认弹框（NEW）----------
+void drawDeleteConfirm() {
+  sprite.fillScreen(TFT_BLACK);
+  sprite.setTextDatum(middle_center);
+  sprite.setFont(&fonts::Font2);
+
+  // 半透明背景框
+  sprite.fillRoundRect(20, 60, tft.width() - 40, 120, 12, sprite.color565(30, 30, 30));
+  sprite.drawRoundRect(20, 60, tft.width() - 40, 120, 12, TFT_YELLOW);
+
+  sprite.setTextColor(TFT_YELLOW, sprite.color565(30, 30, 30));
+  sprite.drawString("确认删除？", tft.width() / 2, 95);
+  sprite.setTextColor(TFT_WHITE, sprite.color565(30, 30, 30));
+  sprite.drawString(fileList[deleteConfirmIndex], tft.width() / 2, 120);
+  sprite.setTextColor(TFT_LIGHTGREY, sprite.color565(30, 30, 30));
+  sprite.drawString("短按: 确认  长按: 取消", tft.width() / 2, 155);
+}
+
+// ---------- 存储模式事件处理（NEW增强版）----------
+void handleStorage() {
+  // ===== 删除确认状态 =====
+  if (showDeleteConfirm) {
+    static unsigned long confirmPressStart = 0;
+    static bool confirmWasPressed = false;
+    bool curPressed = (digitalRead(PIN_SW) == LOW);
+
+    if (curPressed && !confirmWasPressed) {
+      confirmPressStart = millis();
+      confirmWasPressed = true;
+    }
+    else if (curPressed && confirmWasPressed) {
+      if (millis() - confirmPressStart >= 1500) { // 长按取消
+        showDeleteConfirm = false;
+        deleteConfirmIndex = -1;
+        confirmWasPressed = false;
+        screenDirty = true;
+        Serial.println("删除取消");
+        return;
+      }
+    }
+    else if (!curPressed && confirmWasPressed) {
+      if (millis() - confirmPressStart < 1500) { // 短按确认删除
+        String fullPath = currentPath;
+        if (!fullPath.endsWith("/")) fullPath += "/";
+        fullPath += fileList[deleteConfirmIndex];
+        deleteFile(fullPath.c_str());
+        showDeleteConfirm = false;
+        deleteConfirmIndex = -1;
+        scanSD(currentPath.c_str());
+        screenDirty = true;
+      }
+      confirmWasPressed = false;
+    }
+    return;
+  }
+
+  // ===== 正常浏览模式 =====
+  static unsigned long lastJoyTime = 0;
+  const unsigned long joyDelay = 200;
+  int vry = analogRead(PIN_VRY);
+  bool joyMoved = false;
+
+  if (millis() - lastJoyTime > joyDelay) {
+    if (vry < 2048 - joyThreshold) {       // 上
+      if (fileCount > 0) {
+        fileSelectedIndex = (fileSelectedIndex - 1 + fileCount) % fileCount;
+        joyMoved = true;
+      }
+    } else if (vry > 2048 + joyThreshold) { // 下
+      if (fileCount > 0) {
+        fileSelectedIndex = (fileSelectedIndex + 1) % fileCount;
+        joyMoved = true;
+      }
+    }
+
+    if (joyMoved) {
+      lastJoyTime = millis();
+      // 滚动使选中项居中
+      int maxVisible = (tft.height() - 18) / 22;
+      int centerOffset = maxVisible / 2;
+      listScrollOffset = fileSelectedIndex - centerOffset;
+      if (listScrollOffset < 0) listScrollOffset = 0;
+      if (listScrollOffset > fileCount - maxVisible) listScrollOffset = fileCount - maxVisible;
+      if (listScrollOffset < 0) listScrollOffset = 0;
+      screenDirty = true;
+    }
+  }
+
+  // 按钮处理
+  static unsigned long pressStart = 0;
+  static bool wasPressed = false;
+  bool curPressed = (digitalRead(PIN_SW) == LOW);
+
+  if (curPressed && !wasPressed) {
+    pressStart = millis();
+    wasPressed = true;
+  }
+  else if (curPressed && wasPressed) {
+    // 等待释放判定
+  }
+  else if (!curPressed && wasPressed) {
+    unsigned long duration = millis() - pressStart;
+    if (fileCount == 0) {
+      wasPressed = false;
+      return;
+    }
+
+    if (duration < 1500) { // 短按
+      if (isDir[fileSelectedIndex]) {       // 文件夹或".."
+        String name = fileList[fileSelectedIndex];
+        if (name == "..") {
+          // 返回上级目录
+          int lastSlash = currentPath.lastIndexOf('/');
+          if (lastSlash == 0) currentPath = "/";
+          else currentPath = currentPath.substring(0, lastSlash);
+        } else {
+          if (!currentPath.endsWith("/")) currentPath += "/";
+          currentPath += name;
+        }
+        // 限制目录深度
+        int depth = 0;
+        for (int i = 0; i < currentPath.length(); i++) if (currentPath[i] == '/') depth++;
+        if (depth > MAX_DEPTH) {
+          int lastSlash = currentPath.lastIndexOf('/');
+          if (lastSlash == 0) currentPath = "/";
+          else currentPath = currentPath.substring(0, lastSlash);
+          Serial.println("目录过深，禁止进入");
+        }
+        scanSD(currentPath.c_str());
+        fileSelectedIndex = 0;
+        listScrollOffset = 0;
+        viewingImage = false;
+        screenDirty = true;
+      } else {                              // 文件：显示图片
+        String fullPath = currentPath;
+        if (!fullPath.endsWith("/")) fullPath += "/";
+        fullPath += fileList[fileSelectedIndex];
+        viewingImage = true;
+        displaySelectedFile(fullPath.c_str());
+      }
+    }
+    else { // 长按 (>=1500ms)
+      if (!isDir[fileSelectedIndex] && fileList[fileSelectedIndex] != "..") {
+        // 长按文件：弹出删除确认
+        showDeleteConfirm = true;
+        deleteConfirmIndex = fileSelectedIndex;
+        screenDirty = true;
+      } else {
+        // 长按文件夹或".."：返回上级或菜单
+        if (fileList[fileSelectedIndex] == ".." || currentPath != "/") {
+          int lastSlash = currentPath.lastIndexOf('/');
+          if (lastSlash == 0) currentPath = "/";
+          else currentPath = currentPath.substring(0, lastSlash);
+          scanSD(currentPath.c_str());
+          fileSelectedIndex = 0;
+          listScrollOffset = 0;
+          viewingImage = false;
+          screenDirty = true;
+        } else {
+          // 根目录长按文件夹：返回MENU
+          viewingImage = false;
+          showDeleteConfirm = false;
+          currentState = MENU;
+          screenDirty = true;
+          Serial.println("长按返回菜单");
+        }
+      }
+    }
+    wasPressed = false;
+  }
+}
+
+// ---------- 显示选中的图片（NEW参数化）----------
+void displaySelectedFile(const char* filepath) {
+  File imgFile = SD.open(filepath, FILE_READ);
+  if (!imgFile) {
+    Serial.printf("打开文件失败: %s\n", filepath);
+    return;
+  }
+
+  size_t fileSize = imgFile.size();
+  uint8_t* jpgBuf = (uint8_t*)heap_caps_malloc(fileSize, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+  if (!jpgBuf) jpgBuf = (uint8_t*)malloc(fileSize);
+  if (!jpgBuf) {
+    Serial.println("内存不足，无法加载图片");
+    imgFile.close();
+    return;
+  }
+
+  size_t readLen = imgFile.read(jpgBuf, fileSize);
+  imgFile.close();
+
+  if (readLen != fileSize) {
+    Serial.println("读取文件不完整");
+    free(jpgBuf);
+    return;
+  }
+
+  uint16_t jpg_w, jpg_h;
+  if (TJpgDec.getJpgSize(&jpg_w, &jpg_h, jpgBuf, fileSize) != JDR_OK) {
+    Serial.println("非有效JPEG");
+    free(jpgBuf);
+    return;
+  }
+
+  size_t rgbSize = jpg_w * jpg_h * sizeof(uint16_t);
+  img_rgb565 = (uint16_t*)heap_caps_malloc(rgbSize, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+  if (!img_rgb565) img_rgb565 = (uint16_t*)malloc(rgbSize);
+  if (!img_rgb565) {
+    Serial.println("RGB缓冲分配失败");
+    free(jpgBuf);
+    return;
+  }
+
+  TJpgDec.drawJpg(0, 0, jpgBuf, fileSize);
+
+  tft.fillScreen(TFT_BLACK);
+  int screen_w = tft.width();
+  int screen_h = tft.height();
+  float scale_w = (float)screen_w / jpg_w;
+  float scale_h = (float)screen_h / jpg_h;
+  float scale = (scale_w < scale_h) ? scale_w : scale_h;
+  int dst_w = jpg_w * scale;
+  int dst_h = jpg_h * scale;
+  int dst_x = (screen_w - dst_w) / 2;
+  int dst_y = (screen_h - dst_h) / 2;
+  draw_scaled_image(img_rgb565, jpg_w, jpg_h, dst_x, dst_y, dst_w, dst_h);
+
+  free(img_rgb565);
+  img_rgb565 = nullptr;
+  free(jpgBuf);
+  Serial.printf("图片显示完成: %s\n", filepath);
+}
+
+// ---------- 删除文件（NEW）----------
+void deleteFile(const char* filepath) {
+  if (SD.exists(filepath)) {
+    if (SD.remove(filepath)) {
+      Serial.printf("已删除: %s\n", filepath);
+    } else {
+      Serial.printf("删除失败: %s\n", filepath);
+    }
+  } else {
+    Serial.printf("文件不存在: %s\n", filepath);
+  }
 }
