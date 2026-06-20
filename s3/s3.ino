@@ -5,6 +5,7 @@
 #include <SPI.h>
 #include <SD.h>
 #include <ctype.h>
+#include <vector>  // 新增，用于文字换行
 
 // ========== 屏幕引脚 ==========
 #define PIN_SCK  12
@@ -192,6 +193,9 @@ void handleMysteryPage();
 bool loadEnglishWords();
 void drawEnglishChoose();
 void drawEnglishLearn();
+
+// 辅助函数：文本换行
+void splitTextIntoLines(const String &text, int maxWidth, std::vector<String> &lines);
 
 // ---------- 获取下一个照片编号 ----------
 int getNextPhotoIndex() {
@@ -1361,7 +1365,11 @@ void handleMysteryPage() {
     }
 }
 
-// ========== 英语功能实现（流式解析，不吃内存）==========
+// ========== 英语功能实现 ==========
+static bool isChineseChar(uint8_t c) {
+    return (c >= 0xE4 && c <= 0xE9);
+}
+
 bool loadEnglishWords() {
     englishWordCount = 0;
     if (!SD.cardType()) {
@@ -1369,7 +1377,6 @@ bool loadEnglishWords() {
         return false;
     }
 
-    // 直接打开已确认存在的路径
     const char* filepath = "/english/book.txt";
     if (!SD.exists(filepath)) {
         Serial.printf("文件不存在: %s\n", filepath);
@@ -1382,92 +1389,79 @@ bool loadEnglishWords() {
         return false;
     }
 
-    size_t fsize = file.size();
-    Serial.printf("单词文件大小: %u 字节\n", fsize);
+    Serial.println("开始逐行解析单词...");
+    while (file.available() && englishWordCount < MAX_WORDS) {
+        String line = file.readStringUntil('\n');
+        line.trim();
+        if (line.length() == 0) continue;
 
-    // 使用 PSRAM 一次性读入整个文件
-    char* buf = (char*)heap_caps_malloc(fsize + 1, MALLOC_CAP_SPIRAM);
-    if (!buf) {
-        // 如果 PSRAM 分配失败（极少见），尝试普通内存
-        buf = (char*)malloc(fsize + 1);
-    }
-    if (!buf) {
-        Serial.println("内存不足，无法加载单词文件！");
-        file.close();
-        return false;
-    }
+        String word = "";
+        String phonetic = "";
+        String meaning = "";
 
-    size_t readBytes = file.readBytes(buf, fsize);
-    buf[readBytes] = '\0';   // 确保字符串结尾
-    file.close();
+        int bracketStart = line.indexOf('[');
+        int bracketEnd = line.indexOf(']', bracketStart);
 
-    Serial.println("开始解析...");
-
-    char* p = buf;
-    while (*p && englishWordCount < MAX_WORDS) {
-        // 跳过空白字符
-        while (*p && isspace(*p)) p++;
-        if (*p == '\0') break;
-
-        // 单词必须以字母开头
-        if (!isalpha(*p)) { p++; continue; }
-
-        // 1. 提取单词（从当前位置到 '['）
-        char* wordStart = p;
-        while (*p && *p != '[') p++;
-        if (*p != '[') break;   // 格式错误，退出
-        *p = '\0';              // 临时截断单词字符串
-        String word = wordStart;
-        *p = '[';               // 恢复原字符
-        p++;                    // 跳过 '['
-
-        // 2. 提取音标（从当前位置到 ']'）
-        char* phoneticStart = p;
-        while (*p && *p != ']') p++;
-        if (*p != ']') break;   // 格式错误
-        *p = '\0';
-        String phonetic = phoneticStart;
-        *p = ']';
-        p++;                    // 跳过 ']'
-
-        // 3. 提取释义（从当前位置到下一个 '[' 或字符串结尾）
-        char* meaningStart = p;
-        char* nextBracket = strchr(p, '[');
-        if (nextBracket) {
-            // 有下一个单词
-            *nextBracket = '\0';
-            String meaning = meaningStart;
+        if (bracketStart != -1 && bracketEnd != -1) {
+            word = line.substring(0, bracketStart);
+            word.trim();
+            phonetic = line.substring(bracketStart + 1, bracketEnd);
+            meaning = line.substring(bracketEnd + 1);
             meaning.trim();
-            *nextBracket = '[';
-
-            // 存储单词
-            englishWords[englishWordCount].word = word;
-            englishWords[englishWordCount].phonetic = phonetic;
-            englishWords[englishWordCount].meaning = meaning;
-            englishWordCount++;
-
-            // 移动指针到下一个单词的 '[' 前，准备下一轮
-            p = nextBracket;
         } else {
-            // 最后一个单词，释义到字符串结尾
-            String meaning = meaningStart;
-            meaning.trim();
-            englishWords[englishWordCount].word = word;
-            englishWords[englishWordCount].phonetic = phonetic;
-            englishWords[englishWordCount].meaning = meaning;
-            englishWordCount++;
-            break;
+            word = line;
+            for (int i = 0; i < (int)word.length(); i++) {
+                if (isChineseChar((uint8_t)word[i])) {
+                    meaning = word.substring(i);
+                    meaning.trim();
+                    word = word.substring(0, i);
+                    word.trim();
+                    break;
+                }
+            }
         }
 
-        // 每 100 个单词输出一次进度
+        if (word.length() == 0) continue;
+
+        englishWords[englishWordCount].word = word;
+        englishWords[englishWordCount].phonetic = phonetic;
+        englishWords[englishWordCount].meaning = meaning;
+        englishWordCount++;
+
         if (englishWordCount % 100 == 0) {
             Serial.printf("已解析 %d 个单词...\n", englishWordCount);
         }
     }
 
-    free(buf);
+    file.close();
     Serial.printf("解析完成，共 %d 个单词\n", englishWordCount);
     return englishWordCount > 0;
+}
+
+void splitTextIntoLines(const String &text, int maxWidth, std::vector<String> &lines) {
+    if (text.length() == 0) return;
+    String currentLine = "";
+    int i = 0;
+    while (i < text.length()) {
+        int charLen = 1;
+        unsigned char c = text[i];
+        if ((c & 0x80) != 0) {
+            if ((c & 0xE0) == 0xC0) charLen = 2;
+            else if ((c & 0xF0) == 0xE0) charLen = 3;
+            else if ((c & 0xF8) == 0xF0) charLen = 4;
+        }
+        String nextChar = text.substring(i, i + charLen);
+        if (sprite.textWidth(currentLine + nextChar) > maxWidth) {
+            lines.push_back(currentLine);
+            currentLine = nextChar;
+        } else {
+            currentLine += nextChar;
+        }
+        i += charLen;
+    }
+    if (currentLine.length() > 0) {
+        lines.push_back(currentLine);
+    }
 }
 
 void drawEnglishChoose() {
@@ -1509,7 +1503,7 @@ void drawEnglishLearn() {
     WordEntry &w = englishWords[englishWordIndex];
     String line1, line2;
 
-    if (englishLearnMode == 0) {
+    if (englishLearnMode == 0) {  // 英文模式
         if (englishPhase == 0) {
             line1 = w.word;
             line2 = "[" + w.phonetic + "]";
@@ -1517,7 +1511,7 @@ void drawEnglishLearn() {
             line1 = w.meaning;
             line2 = "";
         }
-    } else {
+    } else {                      // 中文模式
         if (englishPhase == 0) {
             line1 = w.meaning;
             line2 = "";
@@ -1527,20 +1521,41 @@ void drawEnglishLearn() {
         }
     }
 
+    sprite.setFont(&fonts::efontCN_16);
     sprite.setTextDatum(middle_center);
-    sprite.setFont(&fonts::FreeSansBold18pt7b);
-    sprite.setTextColor(TFT_WHITE);
-    sprite.drawString(line1, tft.width()/2, tft.height()/2 - 20);
 
+    const int maxTextWidth = tft.width() - 40;
+    const int lineHeight = 22;
+
+    std::vector<String> lines1, lines2;
+    splitTextIntoLines(line1, maxTextWidth, lines1);
     if (line2.length() > 0) {
-        sprite.setFont(&fonts::efontCN_16);
-        sprite.setTextColor(TFT_LIGHTGREY);
-        sprite.drawString(line2, tft.width()/2, tft.height()/2 + 30);
+        splitTextIntoLines(line2, maxTextWidth, lines2);
     }
 
-    sprite.setFont(&fonts::efontCN_12);
+    int totalLines = lines1.size() + lines2.size();
+    int totalHeight = totalLines * lineHeight;
+    int startY = (tft.height() - totalHeight) / 2 + lineHeight / 2;
+
+    sprite.setTextColor(TFT_WHITE);
+    for (const auto &l : lines1) {
+        sprite.drawString(l, tft.width() / 2, startY);
+        startY += lineHeight;
+    }
+
+    if (lines2.size() > 0) {
+        sprite.setTextColor(TFT_LIGHTGREY);
+        for (const auto &l : lines2) {
+            sprite.drawString(l, tft.width() / 2, startY);
+            startY += lineHeight;
+        }
+    }
+
     sprite.setTextColor(TFT_DARKGREY);
-    sprite.drawString(String(englishWordIndex+1) + "/" + String(englishWordCount), tft.width()/2, tft.height() - 15);
+    int progressY = startY + 8;
+    if (progressY > tft.height() - 10) progressY = tft.height() - 10;
+    sprite.drawString(String(englishWordIndex + 1) + "/" + String(englishWordCount),
+                      tft.width() / 2, progressY);
 }
 
 // ========== 主循环 ==========
@@ -1689,7 +1704,6 @@ void loop() {
                 tft.fillScreen(TFT_BLACK);
             }
             else if (selectedIndex == 4) {
-                // 英语功能
                 if (loadEnglishWords()) {
                     englishLearnMode = 1;
                     currentState = ENGLISH_CHOOSE;
