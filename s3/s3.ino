@@ -5,7 +5,8 @@
 #include <SPI.h>
 #include <SD.h>
 #include <ctype.h>
-#include <vector>  // 新增，用于文字换行
+#include <vector>
+#include <queue>       // 用于扫雷 flood fill
 
 // ========== 屏幕引脚 ==========
 #define PIN_SCK  12
@@ -73,7 +74,13 @@ enum UIState { HOME, MENU, CAMERA, STORAGE,
                NUM_GRID,
                MYSTERY_PAGE,
                ENGLISH_CHOOSE,
-               ENGLISH_LEARN };
+               ENGLISH_LEARN,
+               GAME_FLY,
+               GAME_MINESWEEPER,
+               GAME_2048,
+               GAME_BREAKOUT,
+               GAME_SNAKE,
+               GAME_DINO };
 UIState currentState = HOME;
 
 int selectedIndex = 0;
@@ -158,6 +165,11 @@ int numGridSelectedIndex = 0;
 int passwordSequence[6];
 int passwordIndex = 0;
 
+// ========== 神秘页面列表 ==========
+int mysterySelectedIndex = 0;
+const int mysteryTotalItems = 6;
+const char* mysteryGameNames[] = { "飞机游戏", "扫雷", "打砖块", "贪吃蛇", "2048", "小恐龙" };
+
 // ========== 英语学习相关变量 ==========
 #define MAX_WORDS 500
 struct WordEntry {
@@ -171,7 +183,120 @@ int englishLearnMode = 0;   // 0=英文模式, 1=中文模式
 int englishWordIndex = 0;
 int englishPhase = 0;       // 0=主面, 1=翻转面
 
-// ---------- 函数声明 ----------
+// ============================================================
+//  游戏相关定义（飞机打陨石）
+// ============================================================
+#define MAX_METEORS 10
+#define MAX_BULLETS 20
+
+struct Meteor {
+    int x, y;
+    bool active;
+    int speed;
+};
+
+struct Bullet {
+    int x, y;
+    bool active;
+};
+
+Meteor meteors[MAX_METEORS];
+Bullet bullets[MAX_BULLETS];
+int playerX, playerY;
+int score;
+int gameState;          // 0: playing, 1: game over
+unsigned long lastMeteorSpawn;
+int meteorSpeedBase;
+int spawnInterval;      // ms
+unsigned long lastGameFrameTime;
+bool gameSwPressed = false;
+unsigned long gameSwPressTime = 0;
+
+// ============================================================
+//  新增游戏全局变量
+// ============================================================
+
+// ---------- 扫雷 ----------
+#define MS_ROWS 16
+#define MS_COLS 16
+struct MSCell {
+    bool mine;
+    bool revealed;
+    int neighborMines;  // -1 if mine
+};
+MSCell msGrid[MS_ROWS][MS_COLS];
+int msCursorX, msCursorY;
+bool msGameOver;
+bool msWin;
+int msRevealedCount;
+int msTotalSafe;
+int msCellSize;         // 计算得出
+int msOffsetX, msOffsetY;
+
+// ---------- 2048 ----------
+#define GRID_SIZE 4
+int grid2048[GRID_SIZE][GRID_SIZE];
+bool gridMerged[GRID_SIZE][GRID_SIZE];
+int score2048;
+bool gameOver2048;
+bool gameWin2048;
+bool moved2048;
+unsigned long last2048InputTime;
+const int GAME2048_DELAY = 150; // 修复：原为 2048_DELAY（非法标识符）
+
+// ---------- 打砖块 ----------
+#define BRICK_ROWS 6
+#define BRICK_COLS 8
+struct Brick {
+    bool alive;
+    int x, y, w, h;
+};
+Brick bricks[BRICK_ROWS][BRICK_COLS];
+int paddleX, paddleY;
+int ballX, ballY;
+int ballVx, ballVy;
+int brickScore;
+bool breakoutGameOver;
+bool breakoutWin;
+int brickW, brickH, brickGap;
+int paddleW, paddleH;
+
+// ---------- 贪吃蛇 ----------
+#define SNAKE_MAX_LEN 200
+struct Point { int x, y; };
+Point snake[SNAKE_MAX_LEN];
+int snakeLen;
+int snakeDir; // 0上 1右 2下 3左
+int snakeNextDir;
+bool snakeFood;
+int foodX, foodY;
+int snakeCellSize;
+int snakeGridW, snakeGridH;
+bool snakeGameOver;
+unsigned long snakeMoveTimer;
+int snakeMoveInterval = 200;
+
+// ---------- 小恐龙 ----------
+#define MAX_OBSTACLES 10
+struct Obstacle {
+    int x, y, w, h;
+    bool active;
+};
+Obstacle obstacles[MAX_OBSTACLES];
+int dinoX, dinoY;
+int dinoW, dinoH;
+int dinoVy;
+bool dinoOnGround;
+bool dinoCrouching;
+int dinoScore;
+bool dinoGameOver;
+unsigned long dinoSpawnTimer;
+int dinoSpawnInterval = 1200;
+int groundY;
+
+// ============================================================
+//  函数声明（原有 + 新增）
+// ============================================================
 void scanSD(const char* path);
 void drawFileList();
 void handleStorage();
@@ -194,8 +319,42 @@ bool loadEnglishWords();
 void drawEnglishChoose();
 void drawEnglishLearn();
 
-// 辅助函数：文本换行
 void splitTextIntoLines(const String &text, int maxWidth, std::vector<String> &lines);
+
+// 飞机游戏
+void initGame();
+void spawnMeteor();
+void shootBullet();
+void updateGame();
+void renderGame();
+void handleGameInput();
+void handleGame();
+
+// 新增游戏声明
+void initMinesweeper();
+void handleMinesweeper();
+void updateMinesweeper();
+void renderMinesweeper();
+
+void init2048();
+void handle2048();
+void update2048();
+void render2048();
+
+void initBreakout();
+void handleBreakout();
+void updateBreakout();
+void renderBreakout();
+
+void initSnake();
+void handleSnake();
+void updateSnake();
+void renderSnake();
+
+void initDino();
+void handleDino();
+void updateDino();
+void renderDino();
 
 // ---------- 获取下一个照片编号 ----------
 int getNextPhotoIndex() {
@@ -1160,6 +1319,8 @@ void setup() {
     pinMode(PIN_SW, INPUT_PULLUP);
     analogReadResolution(12);
 
+    randomSeed(analogRead(0));
+
     tft.init();
     tft.setRotation(1);
     tft.setColorDepth(16);
@@ -1319,6 +1480,7 @@ void handleNumGrid() {
                     }
                     if (match) {
                         currentState = MYSTERY_PAGE;
+                        mysterySelectedIndex = 0;
                         screenDirty = true;
                     }
                     passwordIndex = 0;
@@ -1335,34 +1497,1020 @@ void handleNumGrid() {
     }
 }
 
-// ========== 神秘页面 ==========
+// ========== 神秘页面（游戏列表） ==========
 void drawMysteryPage() {
     sprite.fillScreen(TFT_BLACK);
-    const int boxW = 200;
-    const int boxH = 120;
-    int boxX = (tft.width() - boxW) / 2;
-    int boxY = (tft.height() - boxH) / 2;
-
-    sprite.fillRoundRect(boxX, boxY, boxW, boxH, 12, sprite.color565(30, 30, 30));
-    sprite.drawRoundRect(boxX, boxY, boxW, boxH, 12, TFT_WHITE);
-
-    sprite.setTextDatum(middle_center);
-    sprite.setTextColor(TFT_WHITE);
     sprite.setFont(&fonts::efontCN_16);
-    sprite.drawString("神秘小页面", tft.width() / 2, tft.height() / 2);
+
+    const int btnW = 180;
+    const int btnH = 36;
+    const int gap = 8;
+    int totalH = mysteryTotalItems * (btnH + gap) - gap;
+    int startY = (tft.height() - totalH) / 2;
+    int startX = (tft.width() - btnW) / 2;
+
+    for (int i = 0; i < mysteryTotalItems; i++) {
+        int y = startY + i * (btnH + gap);
+        bool selected = (i == mysterySelectedIndex);
+        uint16_t bg = selected ? TFT_YELLOW : sprite.color565(30, 30, 30);
+        uint16_t tc = selected ? TFT_BLACK : TFT_WHITE;
+
+        sprite.fillRoundRect(startX, y, btnW, btnH, 8, bg);
+        if (selected) {
+            sprite.drawRoundRect(startX - 2, y - 2, btnW + 4, btnH + 4, 10, sprite.color565(255,200,0));
+            sprite.drawRoundRect(startX, y, btnW, btnH, 8, TFT_WHITE);
+        }
+        sprite.setTextDatum(middle_center);
+        sprite.setTextColor(tc, bg);
+        sprite.drawString(mysteryGameNames[i], tft.width() / 2, y + btnH / 2);
+    }
 }
 
 void handleMysteryPage() {
+    static unsigned long lastJoyTime = 0;
+    const unsigned long joyDelay = 200;
+
+    if (millis() - lastJoyTime > joyDelay) {
+        int vrx = analogRead(PIN_VRX);
+        int vry = analogRead(PIN_VRY);
+        bool moved = false;
+
+        if (vry < 2048 - joyThreshold) {
+            mysterySelectedIndex = (mysterySelectedIndex - 1 + mysteryTotalItems) % mysteryTotalItems;
+            moved = true;
+        } else if (vry > 2048 + joyThreshold) {
+            mysterySelectedIndex = (mysterySelectedIndex + 1) % mysteryTotalItems;
+            moved = true;
+        }
+        if (moved) {
+            lastJoyTime = millis();
+            screenDirty = true;
+        }
+    }
+
     static bool wasPressed = false;
     bool curPressed = (digitalRead(PIN_SW) == LOW);
-
     if (curPressed && !wasPressed) {
         wasPressed = true;
     } else if (!curPressed && wasPressed) {
-        currentState = MENU;
-        screenDirty = true;
+        switch (mysterySelectedIndex) {
+            case 0: currentState = GAME_FLY; initGame(); screenDirty = true; break;
+            case 1: currentState = GAME_MINESWEEPER; initMinesweeper(); screenDirty = true; break;
+            case 2: currentState = GAME_BREAKOUT; initBreakout(); screenDirty = true; break;
+            case 3: currentState = GAME_SNAKE; initSnake(); screenDirty = true; break;
+            case 4: currentState = GAME_2048; init2048(); screenDirty = true; break;
+            case 5: currentState = GAME_DINO; initDino(); screenDirty = true; break;
+            default: break;
+        }
         wasPressed = false;
     }
+
+    if (screenDirty) {
+        drawMysteryPage();
+        sprite.pushSprite(0, 0);
+        screenDirty = false;
+    }
+}
+
+// ============================================================
+//  飞机打陨石游戏实现
+// ============================================================
+void initGame() {
+    playerX = tft.width() / 2;
+    playerY = tft.height() - 30;
+    score = 0;
+    gameState = 0;
+
+    for (int i = 0; i < MAX_METEORS; i++) meteors[i].active = false;
+    for (int i = 0; i < MAX_BULLETS; i++) bullets[i].active = false;
+
+    meteorSpeedBase = 2;
+    spawnInterval = 1000;
+    lastMeteorSpawn = millis();
+    lastGameFrameTime = millis();
+
+    gameSwPressed = false;
+    gameSwPressTime = 0;
+}
+
+void spawnMeteor() {
+    for (int i = 0; i < MAX_METEORS; i++) {
+        if (!meteors[i].active) {
+            meteors[i].x = random(10, tft.width() - 10);
+            meteors[i].y = 0;
+            meteors[i].active = true;
+            meteors[i].speed = meteorSpeedBase + random(0, 3);
+            break;
+        }
+    }
+}
+
+void shootBullet() {
+    for (int i = 0; i < MAX_BULLETS; i++) {
+        if (!bullets[i].active) {
+            bullets[i].x = playerX;
+            bullets[i].y = playerY - 10;
+            bullets[i].active = true;
+            break;
+        }
+    }
+}
+
+void updateGame() {
+    if (gameState != 0) return;
+
+    for (int i = 0; i < MAX_METEORS; i++) {
+        if (meteors[i].active) {
+            meteors[i].y += meteors[i].speed;
+            if (meteors[i].y > tft.height() + 10) {
+                meteors[i].active = false;
+            }
+        }
+    }
+
+    for (int i = 0; i < MAX_BULLETS; i++) {
+        if (bullets[i].active) {
+            bullets[i].y -= 6;
+            if (bullets[i].y < -10) bullets[i].active = false;
+        }
+    }
+
+    for (int i = 0; i < MAX_BULLETS; i++) {
+        if (!bullets[i].active) continue;
+        for (int j = 0; j < MAX_METEORS; j++) {
+            if (!meteors[j].active) continue;
+            int dx = bullets[i].x - meteors[j].x;
+            int dy = bullets[i].y - meteors[j].y;
+            if (abs(dx) < 10 && abs(dy) < 10) {
+                bullets[i].active = false;
+                meteors[j].active = false;
+                score++;
+                if (score % 5 == 0) {
+                    meteorSpeedBase++;
+                    if (spawnInterval > 200) spawnInterval -= 50;
+                }
+                break;
+            }
+        }
+    }
+
+    for (int i = 0; i < MAX_METEORS; i++) {
+        if (meteors[i].active) {
+            int dx = meteors[i].x - playerX;
+            int dy = meteors[i].y - playerY;
+            if (abs(dx) < 15 && abs(dy) < 15) {
+                gameState = 1;
+                break;
+            }
+        }
+    }
+
+    if (millis() - lastMeteorSpawn > spawnInterval) {
+        spawnMeteor();
+        lastMeteorSpawn = millis();
+    }
+}
+
+void renderGame() {
+    sprite.fillScreen(TFT_BLACK);
+
+    for (int i = 0; i < MAX_METEORS; i++) {
+        if (meteors[i].active) {
+            sprite.fillCircle(meteors[i].x, meteors[i].y, 6, TFT_RED);
+        }
+    }
+
+    for (int i = 0; i < MAX_BULLETS; i++) {
+        if (bullets[i].active) {
+            sprite.drawFastVLine(bullets[i].x, bullets[i].y, 8, TFT_GREEN);
+        }
+    }
+
+    sprite.fillTriangle(playerX, playerY - 12,
+                        playerX - 12, playerY + 6,
+                        playerX + 12, playerY + 6,
+                        TFT_CYAN);
+
+    sprite.setFont(&fonts::efontCN_16);
+    sprite.setTextColor(TFT_WHITE, TFT_BLACK);
+    sprite.setCursor(5, 5);
+    sprite.printf("Score: %d", score);
+
+    if (gameState == 1) {
+        sprite.setTextDatum(middle_center);
+        sprite.setTextColor(TFT_RED, TFT_BLACK);
+        sprite.setFont(&fonts::FreeSansBold24pt7b);
+        sprite.drawString("GAME OVER", tft.width()/2, tft.height()/2 - 30);
+        sprite.setFont(&fonts::efontCN_16);
+        sprite.setTextColor(TFT_WHITE, TFT_BLACK);
+        sprite.drawString("按 SW 重新开始", tft.width()/2, tft.height()/2 + 20);
+    }
+
+    sprite.pushSprite(0, 0);
+}
+
+void handleGameInput() {
+    int vrx = analogRead(PIN_VRX);
+    if (vrx < 2048 - joyThreshold) {
+        playerX -= 6;
+    } else if (vrx > 2048 + joyThreshold) {
+        playerX += 6;
+    }
+    if (playerX < 12) playerX = 12;
+    if (playerX > tft.width() - 12) playerX = tft.width() - 12;
+
+    int sw = digitalRead(PIN_SW);
+    if (sw == LOW && !gameSwPressed) {
+        gameSwPressed = true;
+        gameSwPressTime = millis();
+    } else if (sw == HIGH && gameSwPressed) {
+        unsigned long duration = millis() - gameSwPressTime;
+        if (duration < 200) {
+            if (gameState == 0) {
+                shootBullet();
+            }
+        } else if (duration > 2000) {
+            currentState = MYSTERY_PAGE;
+            screenDirty = true;
+        }
+        gameSwPressed = false;
+    }
+
+    if (gameState == 1 && sw == LOW) {
+        static bool overPressed = false;
+        if (!overPressed) {
+            overPressed = true;
+        }
+        if (sw == HIGH && overPressed) {
+            initGame();
+            overPressed = false;
+        }
+    }
+}
+
+void handleGame() {
+    unsigned long now = millis();
+    if (now - lastGameFrameTime < 20) {
+        delay(1);
+        return;
+    }
+    lastGameFrameTime = now;
+
+    updateGame();
+    handleGameInput();
+    renderGame();
+}
+
+// ============================================================
+//  扫雷游戏实现
+// ============================================================
+void initMinesweeper() {
+    int screenW = tft.width();
+    int screenH = tft.height();
+    msCellSize = (screenW < screenH) ? screenW / MS_COLS : screenH / MS_ROWS;
+    if (msCellSize < 4) msCellSize = 4;
+    int totalW = msCellSize * MS_COLS;
+    int totalH = msCellSize * MS_ROWS;
+    msOffsetX = (screenW - totalW) / 2;
+    msOffsetY = (screenH - totalH) / 2;
+
+    for (int r = 0; r < MS_ROWS; r++) {
+        for (int c = 0; c < MS_COLS; c++) {
+            msGrid[r][c].mine = false;
+            msGrid[r][c].revealed = false;
+            msGrid[r][c].neighborMines = 0;
+        }
+    }
+
+    int minesPlaced = 0;
+    while (minesPlaced < 40) {
+        int r = random(MS_ROWS);
+        int c = random(MS_COLS);
+        if (!msGrid[r][c].mine) {
+            msGrid[r][c].mine = true;
+            minesPlaced++;
+        }
+    }
+
+    for (int r = 0; r < MS_ROWS; r++) {
+        for (int c = 0; c < MS_COLS; c++) {
+            if (msGrid[r][c].mine) {
+                msGrid[r][c].neighborMines = -1;
+                continue;
+            }
+            int count = 0;
+            for (int dr = -1; dr <= 1; dr++) {
+                for (int dc = -1; dc <= 1; dc++) {
+                    int nr = r + dr, nc = c + dc;
+                    if (nr >= 0 && nr < MS_ROWS && nc >= 0 && nc < MS_COLS && msGrid[nr][nc].mine)
+                        count++;
+                }
+            }
+            msGrid[r][c].neighborMines = count;
+        }
+    }
+
+    msCursorX = 0;
+    msCursorY = 0;
+    msGameOver = false;
+    msWin = false;
+    msRevealedCount = 0;
+    msTotalSafe = MS_ROWS * MS_COLS - 40;
+}
+
+void floodFillReveal(int row, int col) {
+    std::queue<std::pair<int,int>> q;
+    q.push({row, col});
+    while (!q.empty()) {
+        auto [r, c] = q.front(); q.pop();
+        if (r < 0 || r >= MS_ROWS || c < 0 || c >= MS_COLS) continue;
+        if (msGrid[r][c].revealed) continue;
+        if (msGrid[r][c].mine) continue;
+        msGrid[r][c].revealed = true;
+        msRevealedCount++;
+        if (msGrid[r][c].neighborMines == 0) {
+            for (int dr = -1; dr <= 1; dr++) {
+                for (int dc = -1; dc <= 1; dc++) {
+                    int nr = r + dr, nc = c + dc;
+                    if (nr >= 0 && nr < MS_ROWS && nc >= 0 && nc < MS_COLS && !msGrid[nr][nc].revealed && !msGrid[nr][nc].mine) {
+                        q.push({nr, nc});
+                    }
+                }
+            }
+        }
+    }
+}
+
+void handleMinesweeper() {
+    static unsigned long lastJoyTime = 0;
+    const unsigned long joyDelay = 150;
+    if (millis() - lastJoyTime > joyDelay && !msGameOver && !msWin) {
+        int vrx = analogRead(PIN_VRX);
+        int vry = analogRead(PIN_VRY);
+        bool moved = false;
+        if (vrx < 2048 - joyThreshold) { msCursorX = (msCursorX - 1 + MS_COLS) % MS_COLS; moved = true; }
+        else if (vrx > 2048 + joyThreshold) { msCursorX = (msCursorX + 1) % MS_COLS; moved = true; }
+        if (vry < 2048 - joyThreshold) { msCursorY = (msCursorY - 1 + MS_ROWS) % MS_ROWS; moved = true; }
+        else if (vry > 2048 + joyThreshold) { msCursorY = (msCursorY + 1) % MS_ROWS; moved = true; }
+        if (moved) {
+            lastJoyTime = millis();
+            renderMinesweeper();
+            return;
+        }
+    }
+
+    static bool swWasPressed = false;
+    bool curPressed = (digitalRead(PIN_SW) == LOW);
+    if (curPressed && !swWasPressed) {
+        swWasPressed = true;
+    } else if (!curPressed && swWasPressed) {
+        swWasPressed = false;
+        if (!msGameOver && !msWin) {
+            int r = msCursorY, c = msCursorX;
+            if (msGrid[r][c].mine) {
+                msGameOver = true;
+                for (int i = 0; i < MS_ROWS; i++)
+                    for (int j = 0; j < MS_COLS; j++)
+                        if (msGrid[i][j].mine) msGrid[i][j].revealed = true;
+            } else {
+                if (!msGrid[r][c].revealed) {
+                    floodFillReveal(r, c);
+                    if (msRevealedCount == msTotalSafe) {
+                        msWin = true;
+                    }
+                }
+            }
+            renderMinesweeper();
+        } else {
+            currentState = MYSTERY_PAGE;
+            screenDirty = true;
+        }
+    }
+}
+
+void renderMinesweeper() {
+    sprite.fillScreen(TFT_BLACK);
+    int screenW = tft.width(), screenH = tft.height();
+
+    for (int r = 0; r < MS_ROWS; r++) {
+        for (int c = 0; c < MS_COLS; c++) {
+            int x = msOffsetX + c * msCellSize;
+            int y = msOffsetY + r * msCellSize;
+            bool revealed = msGrid[r][c].revealed;
+            uint16_t color = revealed ? TFT_DARKGREY : TFT_WHITE;
+            sprite.fillRect(x, y, msCellSize, msCellSize, color);
+            sprite.drawRect(x, y, msCellSize, msCellSize, TFT_BLACK);
+
+            if (revealed) {
+                if (msGrid[r][c].mine) {
+                    sprite.fillCircle(x + msCellSize/2, y + msCellSize/2, msCellSize/4, TFT_RED);
+                } else if (msGrid[r][c].neighborMines > 0) {
+                    sprite.setFont(&fonts::efontCN_16);
+                    sprite.setTextDatum(middle_center);
+                    sprite.setTextColor(TFT_BLACK);
+                    sprite.drawString(String(msGrid[r][c].neighborMines), x + msCellSize/2, y + msCellSize/2);
+                }
+            }
+        }
+    }
+
+    if (!msGameOver && !msWin) {
+        int x = msOffsetX + msCursorX * msCellSize;
+        int y = msOffsetY + msCursorY * msCellSize;
+        sprite.drawRect(x-2, y-2, msCellSize+4, msCellSize+4, TFT_YELLOW);
+    }
+
+    sprite.setFont(&fonts::efontCN_16);
+    sprite.setTextColor(TFT_WHITE, TFT_BLACK);
+    sprite.setCursor(5, 5);
+    if (msWin) {
+        sprite.printf("你赢了！");
+    } else if (msGameOver) {
+        sprite.printf("游戏结束");
+    } else {
+        sprite.printf("雷: %d", 40);
+    }
+
+    sprite.pushSprite(0, 0);
+}
+
+// ============================================================
+//  2048 游戏实现
+// ============================================================
+void init2048() {
+    for (int r = 0; r < GRID_SIZE; r++)
+        for (int c = 0; c < GRID_SIZE; c++)
+            grid2048[r][c] = 0;
+    score2048 = 0;
+    gameOver2048 = false;
+    gameWin2048 = false;
+    for (int i = 0; i < 2; i++) {
+        int r, c;
+        do {
+            r = random(GRID_SIZE);
+            c = random(GRID_SIZE);
+        } while (grid2048[r][c] != 0);
+        grid2048[r][c] = (random(10) < 9) ? 2 : 4;
+    }
+    last2048InputTime = millis();
+    moved2048 = false;
+}
+
+bool slide2048(int dir) {
+    bool moved = false;
+    for (int r = 0; r < GRID_SIZE; r++)
+        for (int c = 0; c < GRID_SIZE; c++)
+            gridMerged[r][c] = false;
+
+    int dr = 0, dc = 0;
+    int startR = 0, startC = 0, stepR = 1, stepC = 1;
+    if (dir == 0) { dr = -1; startR = 1; stepR = 1; }
+    else if (dir == 2) { dr = 1; startR = GRID_SIZE-2; stepR = -1; }
+    else if (dir == 1) { dc = 1; startC = GRID_SIZE-2; stepC = -1; }
+    else if (dir == 3) { dc = -1; startC = 1; stepC = 1; }
+
+    for (int r = 0; r < GRID_SIZE; r++) {
+        for (int c = 0; c < GRID_SIZE; c++) {
+            int rr = (dir == 0 || dir == 2) ? (dir == 0 ? r : GRID_SIZE-1-r) : (dir == 1 ? c : GRID_SIZE-1-c);
+            int cc = (dir == 0 || dir == 2) ? c : r;
+            int val = grid2048[rr][cc];
+            if (val == 0) continue;
+            int nr = rr, nc = cc;
+            while (true) {
+                int tr = nr + dr, tc = nc + dc;
+                if (tr < 0 || tr >= GRID_SIZE || tc < 0 || tc >= GRID_SIZE) break;
+                if (grid2048[tr][tc] == 0) {
+                    nr = tr; nc = tc;
+                    continue;
+                } else if (grid2048[tr][tc] == val && !gridMerged[tr][tc]) {
+                    grid2048[tr][tc] = val * 2;
+                    gridMerged[tr][tc] = true;
+                    grid2048[nr][nc] = 0;
+                    score2048 += val * 2;
+                    moved = true;
+                    if (val * 2 == 2048) gameWin2048 = true;
+                    break;
+                } else {
+                    break;
+                }
+            }
+            if (nr != rr || nc != cc) {
+                grid2048[nr][nc] = val;
+                if (nr != rr || nc != cc) grid2048[rr][cc] = 0;
+                moved = true;
+            }
+        }
+    }
+    return moved;
+}
+
+bool canMove2048() {
+    for (int r = 0; r < GRID_SIZE; r++) {
+        for (int c = 0; c < GRID_SIZE; c++) {
+            if (grid2048[r][c] == 0) return true;
+            if (r < GRID_SIZE-1 && grid2048[r][c] == grid2048[r+1][c]) return true;
+            if (c < GRID_SIZE-1 && grid2048[r][c] == grid2048[r][c+1]) return true;
+        }
+    }
+    return false;
+}
+
+void spawn2048() {
+    int r, c;
+    do {
+        r = random(GRID_SIZE);
+        c = random(GRID_SIZE);
+    } while (grid2048[r][c] != 0);
+    grid2048[r][c] = (random(10) < 9) ? 2 : 4;
+}
+
+void handle2048() {
+    unsigned long now = millis();
+    if (now - last2048InputTime < GAME2048_DELAY) return;
+
+    int vrx = analogRead(PIN_VRX);
+    int vry = analogRead(PIN_VRY);
+    int dir = -1;
+    if (vrx < 2048 - joyThreshold) dir = 3;
+    else if (vrx > 2048 + joyThreshold) dir = 1;
+    else if (vry < 2048 - joyThreshold) dir = 0;
+    else if (vry > 2048 + joyThreshold) dir = 2;
+    else return;
+
+    last2048InputTime = now;
+    if (gameOver2048 || gameWin2048) {
+        if (digitalRead(PIN_SW) == LOW) {
+            init2048();
+            render2048();
+        }
+        return;
+    }
+
+    if (dir >= 0) {
+        if (slide2048(dir)) {
+            spawn2048();
+            if (!canMove2048()) gameOver2048 = true;
+            render2048();
+        }
+    }
+}
+
+void render2048() {
+    sprite.fillScreen(TFT_BLACK);
+    int cellSize = (tft.width() < tft.height()) ? tft.width() / GRID_SIZE : tft.height() / GRID_SIZE;
+    if (cellSize > 70) cellSize = 70;
+    int offsetX = (tft.width() - cellSize * GRID_SIZE) / 2;
+    int offsetY = (tft.height() - cellSize * GRID_SIZE) / 2;
+
+    for (int r = 0; r < GRID_SIZE; r++) {
+        for (int c = 0; c < GRID_SIZE; c++) {
+            int x = offsetX + c * cellSize;
+            int y = offsetY + r * cellSize;
+            int val = grid2048[r][c];
+            uint16_t bg = TFT_DARKGREY;
+            if (val > 0) {
+                uint8_t hue = (val == 2) ? 200 : (val == 4) ? 180 : (val == 8) ? 160 : (val == 16) ? 140 : (val == 32) ? 120 : (val == 64) ? 100 : (val == 128) ? 80 : (val == 256) ? 60 : (val == 512) ? 40 : (val == 1024) ? 20 : 0;
+                bg = sprite.color565(255 - hue/2, 200 - hue/2, 100);
+            }
+            sprite.fillRect(x, y, cellSize, cellSize, bg);
+            sprite.drawRect(x, y, cellSize, cellSize, TFT_WHITE);
+            if (val > 0) {
+                sprite.setFont(&fonts::efontCN_16);
+                sprite.setTextDatum(middle_center);
+                sprite.setTextColor(TFT_BLACK);
+                sprite.drawString(String(val), x + cellSize/2, y + cellSize/2);
+            }
+        }
+    }
+
+    sprite.setFont(&fonts::efontCN_16);
+    sprite.setTextColor(TFT_WHITE, TFT_BLACK);
+    sprite.setCursor(5, 5);
+    sprite.printf("Score: %d", score2048);
+    if (gameWin2048) sprite.printf("  WIN!");
+    if (gameOver2048) sprite.printf("  GAME OVER");
+
+    sprite.pushSprite(0, 0);
+}
+
+// ============================================================
+//  打砖块实现
+// ============================================================
+void initBreakout() {
+    brickScore = 0;
+    breakoutGameOver = false;
+    breakoutWin = false;
+
+    brickW = 30;
+    brickH = 12;
+    brickGap = 4;
+    int totalBrickW = BRICK_COLS * (brickW + brickGap) - brickGap;
+    int startX = (tft.width() - totalBrickW) / 2;
+    int startY = 20;
+    for (int r = 0; r < BRICK_ROWS; r++) {
+        for (int c = 0; c < BRICK_COLS; c++) {
+            bricks[r][c].alive = true;
+            bricks[r][c].x = startX + c * (brickW + brickGap);
+            bricks[r][c].y = startY + r * (brickH + brickGap);
+            bricks[r][c].w = brickW;
+            bricks[r][c].h = brickH;
+        }
+    }
+
+    paddleW = 50;
+    paddleH = 8;
+    paddleX = (tft.width() - paddleW) / 2;
+    paddleY = tft.height() - 20;
+
+    ballX = tft.width() / 2;
+    ballY = paddleY - 8;
+    ballVx = 3;
+    ballVy = -4;
+}
+
+void updateBreakout() {
+    if (breakoutGameOver || breakoutWin) return;
+
+    ballX += ballVx;
+    ballY += ballVy;
+
+    if (ballX < 0 || ballX > tft.width()) ballVx = -ballVx;
+    if (ballY < 0) ballVy = -ballVy;
+    if (ballY > tft.height()) {
+        breakoutGameOver = true;
+        return;
+    }
+
+    if (ballY + 4 >= paddleY && ballY - 4 <= paddleY + paddleH &&
+        ballX >= paddleX && ballX <= paddleX + paddleW) {
+        ballVy = -ballVy;
+        int hitPos = (ballX - paddleX) / (paddleW / 5);
+        ballVx = (hitPos - 2) * 2;
+        if (ballVx == 0) ballVx = 2;
+    }
+
+    for (int r = 0; r < BRICK_ROWS; r++) {
+        for (int c = 0; c < BRICK_COLS; c++) {
+            if (!bricks[r][c].alive) continue;
+            Brick &b = bricks[r][c];
+            if (ballX + 4 >= b.x && ballX - 4 <= b.x + b.w &&
+                ballY + 4 >= b.y && ballY - 4 <= b.y + b.h) {
+                b.alive = false;
+                brickScore += 10;
+                if (ballX < b.x || ballX > b.x + b.w) ballVx = -ballVx;
+                else ballVy = -ballVy;
+                bool allGone = true;
+                for (int rr = 0; rr < BRICK_ROWS; rr++)
+                    for (int cc = 0; cc < BRICK_COLS; cc++)
+                        if (bricks[rr][cc].alive) { allGone = false; break; }
+                if (allGone) breakoutWin = true;
+                return;
+            }
+        }
+    }
+}
+
+void handleBreakout() {
+    int vrx = analogRead(PIN_VRX);
+    if (vrx < 2048 - joyThreshold) paddleX -= 8;
+    else if (vrx > 2048 + joyThreshold) paddleX += 8;
+    if (paddleX < 0) paddleX = 0;
+    if (paddleX > tft.width() - paddleW) paddleX = tft.width() - paddleW;
+
+    static bool swPressed = false;
+    bool cur = digitalRead(PIN_SW) == LOW;
+    if (cur && !swPressed) {
+        swPressed = true;
+    } else if (!cur && swPressed) {
+        swPressed = false;
+        if (breakoutGameOver || breakoutWin) {
+            currentState = MYSTERY_PAGE;
+            screenDirty = true;
+        } else {
+            initBreakout();
+        }
+    }
+}
+
+void renderBreakout() {
+    sprite.fillScreen(TFT_BLACK);
+
+    for (int r = 0; r < BRICK_ROWS; r++) {
+        for (int c = 0; c < BRICK_COLS; c++) {
+            if (bricks[r][c].alive) {
+                uint16_t color = sprite.color565(255 - r*30, 100, 50 + r*20);
+                sprite.fillRect(bricks[r][c].x, bricks[r][c].y, bricks[r][c].w, bricks[r][c].h, color);
+                sprite.drawRect(bricks[r][c].x, bricks[r][c].y, bricks[r][c].w, bricks[r][c].h, TFT_WHITE);
+            }
+        }
+    }
+
+    sprite.fillRect(paddleX, paddleY, paddleW, paddleH, TFT_GREEN);
+    sprite.fillCircle(ballX, ballY, 4, TFT_YELLOW);
+
+    sprite.setFont(&fonts::efontCN_16);
+    sprite.setTextColor(TFT_WHITE, TFT_BLACK);
+    sprite.setCursor(5, 5);
+    sprite.printf("Score: %d", brickScore);
+    if (breakoutWin) {
+        sprite.setTextColor(TFT_GREEN);
+        sprite.setCursor(5, 25);
+        sprite.print("YOU WIN!");
+    } else if (breakoutGameOver) {
+        sprite.setTextColor(TFT_RED);
+        sprite.setCursor(5, 25);
+        sprite.print("GAME OVER");
+    }
+
+    sprite.pushSprite(0, 0);
+}
+
+// ============================================================
+//  贪吃蛇实现
+// ============================================================
+void initSnake() {
+    snakeCellSize = 16;
+    snakeGridW = tft.width() / snakeCellSize;
+    snakeGridH = tft.height() / snakeCellSize;
+    if (snakeGridW < 10) snakeGridW = 10;
+    if (snakeGridH < 10) snakeGridH = 10;
+
+    snakeLen = 3;
+    snake[0] = {snakeGridW/2, snakeGridH/2};
+    snake[1] = {snakeGridW/2 - 1, snakeGridH/2};
+    snake[2] = {snakeGridW/2 - 2, snakeGridH/2};
+    snakeDir = 1;
+    snakeNextDir = 1;
+    snakeFood = false;
+    snakeGameOver = false;
+    snakeMoveTimer = millis();
+    snakeMoveInterval = 200;
+
+    spawnFood();
+}
+
+void spawnFood() {
+    do {
+        foodX = random(snakeGridW);
+        foodY = random(snakeGridH);
+    } while (isOnSnake(foodX, foodY));
+    snakeFood = true;
+}
+
+bool isOnSnake(int x, int y) {
+    for (int i = 0; i < snakeLen; i++) {
+        if (snake[i].x == x && snake[i].y == y) return true;
+    }
+    return false;
+}
+
+void updateSnake() {
+    if (snakeGameOver) return;
+
+    unsigned long now = millis();
+    if (now - snakeMoveTimer < snakeMoveInterval) return;
+    snakeMoveTimer = now;
+
+    snakeDir = snakeNextDir;
+
+    Point newHead = snake[0];
+    switch (snakeDir) {
+        case 0: newHead.y--; break;
+        case 1: newHead.x++; break;
+        case 2: newHead.y++; break;
+        case 3: newHead.x--; break;
+    }
+
+    bool ate = (newHead.x == foodX && newHead.y == foodY);
+
+    for (int i = snakeLen - 1; i > 0; i--) {
+        snake[i] = snake[i-1];
+    }
+    snake[0] = newHead;
+
+    if (ate) {
+        snakeLen++;
+        snake[snakeLen-1] = snake[snakeLen-2];
+        spawnFood();
+    }
+
+    if (newHead.x < 0 || newHead.x >= snakeGridW || newHead.y < 0 || newHead.y >= snakeGridH) {
+        snakeGameOver = true;
+        return;
+    }
+    for (int i = 1; i < snakeLen; i++) {
+        if (snake[i].x == newHead.x && snake[i].y == newHead.y) {
+            snakeGameOver = true;
+            return;
+        }
+    }
+}
+
+void handleSnake() {
+    int vrx = analogRead(PIN_VRX);
+    int vry = analogRead(PIN_VRY);
+    if (vrx < 2048 - joyThreshold && snakeDir != 1) snakeNextDir = 3;
+    else if (vrx > 2048 + joyThreshold && snakeDir != 3) snakeNextDir = 1;
+    else if (vry < 2048 - joyThreshold && snakeDir != 2) snakeNextDir = 0;
+    else if (vry > 2048 + joyThreshold && snakeDir != 0) snakeNextDir = 2;
+
+    static bool swPressed = false;
+    bool cur = digitalRead(PIN_SW) == LOW;
+    if (cur && !swPressed) {
+        swPressed = true;
+    } else if (!cur && swPressed) {
+        swPressed = false;
+        if (snakeGameOver) {
+            currentState = MYSTERY_PAGE;
+            screenDirty = true;
+        } else {
+            initSnake();
+        }
+    }
+}
+
+void renderSnake() {
+    sprite.fillScreen(TFT_BLACK);
+
+    int offsetX = (tft.width() - snakeGridW * snakeCellSize) / 2;
+    int offsetY = (tft.height() - snakeGridH * snakeCellSize) / 2;
+
+    if (snakeFood) {
+        sprite.fillRect(offsetX + foodX * snakeCellSize, offsetY + foodY * snakeCellSize,
+                        snakeCellSize, snakeCellSize, TFT_RED);
+    }
+
+    for (int i = 0; i < snakeLen; i++) {
+        uint16_t color = (i == 0) ? TFT_YELLOW : TFT_GREEN;
+        sprite.fillRect(offsetX + snake[i].x * snakeCellSize,
+                        offsetY + snake[i].y * snakeCellSize,
+                        snakeCellSize, snakeCellSize, color);
+        sprite.drawRect(offsetX + snake[i].x * snakeCellSize,
+                        offsetY + snake[i].y * snakeCellSize,
+                        snakeCellSize, snakeCellSize, TFT_WHITE);
+    }
+
+    sprite.setFont(&fonts::efontCN_16);
+    sprite.setTextColor(TFT_WHITE, TFT_BLACK);
+    sprite.setCursor(5, 5);
+    sprite.printf("Len: %d", snakeLen);
+    if (snakeGameOver) {
+        sprite.setCursor(5, 25);
+        sprite.setTextColor(TFT_RED);
+        sprite.print("GAME OVER");
+    }
+
+    sprite.pushSprite(0, 0);
+}
+
+// ============================================================
+//  小恐龙实现
+// ============================================================
+void initDino() {
+    dinoW = 20;
+    dinoH = 30;
+    dinoX = 30;
+    groundY = tft.height() - 40;
+    dinoY = groundY - dinoH;
+    dinoVy = 0;
+    dinoOnGround = true;
+    dinoCrouching = false;
+    dinoScore = 0;
+    dinoGameOver = false;
+    dinoSpawnTimer = millis();
+    dinoSpawnInterval = 1200;
+
+    for (int i = 0; i < MAX_OBSTACLES; i++) obstacles[i].active = false;
+}
+
+void updateDino() {
+    if (dinoGameOver) return;
+
+    dinoVy += 1;
+    dinoY += dinoVy;
+    if (dinoY >= groundY - dinoH) {
+        dinoY = groundY - dinoH;
+        dinoVy = 0;
+        dinoOnGround = true;
+    } else {
+        dinoOnGround = false;
+    }
+
+    if (millis() - dinoSpawnTimer > dinoSpawnInterval) {
+        dinoSpawnTimer = millis();
+        for (int i = 0; i < MAX_OBSTACLES; i++) {
+            if (!obstacles[i].active) {
+                obstacles[i].active = true;
+                obstacles[i].w = 12 + random(10);
+                obstacles[i].h = 20 + random(10);
+                obstacles[i].x = tft.width();
+                obstacles[i].y = groundY - obstacles[i].h;
+                break;
+            }
+        }
+    }
+
+    for (int i = 0; i < MAX_OBSTACLES; i++) {
+        if (obstacles[i].active) {
+            obstacles[i].x -= 5;
+            if (obstacles[i].x + obstacles[i].w < 0) {
+                obstacles[i].active = false;
+                dinoScore++;
+            }
+        }
+    }
+
+    for (int i = 0; i < MAX_OBSTACLES; i++) {
+        if (!obstacles[i].active) continue;
+        if (dinoX < obstacles[i].x + obstacles[i].w &&
+            dinoX + dinoW > obstacles[i].x &&
+            dinoY < obstacles[i].y + obstacles[i].h &&
+            dinoY + dinoH > obstacles[i].y) {
+            dinoGameOver = true;
+            return;
+        }
+    }
+}
+
+void handleDino() {
+    int vry = analogRead(PIN_VRY);
+    bool jump = false, crouch = false;
+    if (vry < 2048 - joyThreshold) {
+        jump = true;
+    }
+    if (vry > 2048 + joyThreshold) {
+        crouch = true;
+    }
+
+    static bool jumpKeyPressed = false;
+    static int jumpCount = 0;
+    if (jump && !jumpKeyPressed) {
+        jumpKeyPressed = true;
+        if (dinoOnGround) {
+            dinoVy = -14;
+            dinoOnGround = false;
+            jumpCount = 1;
+        } else if (jumpCount < 2) {
+            dinoVy = -12;
+            jumpCount++;
+        }
+    } else if (!jump) {
+        jumpKeyPressed = false;
+    }
+
+    if (crouch && dinoOnGround) {
+        dinoH = 18;
+        dinoY = groundY - dinoH;
+        dinoCrouching = true;
+    } else {
+        if (!crouch) {
+            dinoH = 30;
+            dinoY = groundY - dinoH;
+            dinoCrouching = false;
+        }
+    }
+
+    static bool swPressed = false;
+    bool cur = digitalRead(PIN_SW) == LOW;
+    if (cur && !swPressed) {
+        swPressed = true;
+    } else if (!cur && swPressed) {
+        swPressed = false;
+        if (dinoGameOver) {
+            currentState = MYSTERY_PAGE;
+            screenDirty = true;
+        } else {
+            initDino();
+        }
+    }
+}
+
+void renderDino() {
+    sprite.fillScreen(TFT_BLACK);
+
+    sprite.drawLine(0, groundY, tft.width(), groundY, TFT_WHITE);
+
+    for (int i = 0; i < MAX_OBSTACLES; i++) {
+        if (obstacles[i].active) {
+            sprite.fillRect(obstacles[i].x, obstacles[i].y, obstacles[i].w, obstacles[i].h, TFT_GREEN);
+        }
+    }
+
+    uint16_t color = dinoCrouching ? TFT_ORANGE : TFT_YELLOW;
+    sprite.fillRect(dinoX, dinoY, dinoW, dinoH, color);
+    sprite.drawRect(dinoX, dinoY, dinoW, dinoH, TFT_WHITE);
+
+    sprite.setFont(&fonts::efontCN_16);
+    sprite.setTextColor(TFT_WHITE, TFT_BLACK);
+    sprite.setCursor(5, 5);
+    sprite.printf("Score: %d", dinoScore);
+    if (dinoGameOver) {
+        sprite.setCursor(5, 25);
+        sprite.setTextColor(TFT_RED);
+        sprite.print("GAME OVER");
+    }
+
+    sprite.pushSprite(0, 0);
 }
 
 // ========== 英语功能实现 ==========
@@ -1503,7 +2651,7 @@ void drawEnglishLearn() {
     WordEntry &w = englishWords[englishWordIndex];
     String line1, line2;
 
-    if (englishLearnMode == 0) {  // 英文模式
+    if (englishLearnMode == 0) {
         if (englishPhase == 0) {
             line1 = w.word;
             line2 = "[" + w.phonetic + "]";
@@ -1511,7 +2659,7 @@ void drawEnglishLearn() {
             line1 = w.meaning;
             line2 = "";
         }
-    } else {                      // 中文模式
+    } else {
         if (englishPhase == 0) {
             line1 = w.meaning;
             line2 = "";
@@ -1646,6 +2794,48 @@ void loop() {
         return;
     }
 
+    // 游戏状态处理
+    if (currentState == GAME_FLY) {
+        handleGame();
+        return;
+    }
+    if (currentState == GAME_MINESWEEPER) {
+        static unsigned long lastRender = 0;
+        if (millis() - lastRender > 50) {
+            lastRender = millis();
+            handleMinesweeper();
+            renderMinesweeper();
+        }
+        return;
+    }
+    if (currentState == GAME_2048) {
+        handle2048();
+        render2048();
+        delay(10);
+        return;
+    }
+    if (currentState == GAME_BREAKOUT) {
+        updateBreakout();
+        handleBreakout();
+        renderBreakout();
+        delay(10);
+        return;
+    }
+    if (currentState == GAME_SNAKE) {
+        updateSnake();
+        handleSnake();
+        renderSnake();
+        delay(10);
+        return;
+    }
+    if (currentState == GAME_DINO) {
+        updateDino();
+        handleDino();
+        renderDino();
+        delay(10);
+        return;
+    }
+
     // --- 原有其他状态处理 ---
     if (currentState == TODO_PAGE) {
         handleTodoPage();
@@ -1664,11 +2854,6 @@ void loop() {
     }
     if (currentState == MYSTERY_PAGE) {
         handleMysteryPage();
-        if (screenDirty) {
-            drawMysteryPage();
-            sprite.pushSprite(0, 0);
-            screenDirty = false;
-        }
         delay(10);
         return;
     }
