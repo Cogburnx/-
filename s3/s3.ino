@@ -4,6 +4,7 @@
 #include <esp_heap_caps.h>
 #include <SPI.h>
 #include <SD.h>
+#include <ctype.h>
 
 // ========== 屏幕引脚 ==========
 #define PIN_SCK  12
@@ -65,11 +66,13 @@ LGFX tft;
 LGFX_Sprite sprite(&tft);
 HardwareSerial SerialCam(1);
 
-// ========== UI 状态（新增 TODO_PAGE, NUM_GRID, MYSTERY_PAGE）==========
+// ========== UI 状态 ==========
 enum UIState { HOME, MENU, CAMERA, STORAGE,
-               TODO_PAGE,       // 新增：待做页面（黑底白字“什么也没有”）
-               NUM_GRID,        // 新增：3×3 数字网格（密码输入）
-               MYSTERY_PAGE };  // 新增：神秘小页面
+               TODO_PAGE,
+               NUM_GRID,
+               MYSTERY_PAGE,
+               ENGLISH_CHOOSE,
+               ENGLISH_LEARN };
 UIState currentState = HOME;
 
 int selectedIndex = 0;
@@ -107,7 +110,7 @@ int imageBottomBtnIndex = 0;
 bool showDeleteConfirm = false;
 int deleteConfirmSelection = 0;
 
-// ========== 菜单布局（保持不变）==========
+// ========== 菜单布局 ==========
 const int boxW = 90;
 const int boxH = 70;
 const int boxGapX = 12;
@@ -117,7 +120,6 @@ const int startX = (320 - boxesTotalWidth) / 2;
 const int boxesTotalHeight = (boxH * rows) + boxGapY;
 const int startY = (240 - boxesTotalHeight) / 2;
 
-// --- 修改：菜单文本“对话” → “待做” ---
 const char* menuTexts[] = { "搜索", "拍摄", "存储", "语文", "英语", "待做" };
 
 // ========== 摄像头相关变量 ==========
@@ -143,17 +145,30 @@ unsigned long lastFpsPrint = 0;
 uint32_t frameCount = 0;
 uint32_t lastFrameCount = 0;
 
-// ---------- 视频播放全局变量（用于行缓冲回调）----------
+// ---------- 视频播放全局变量 ----------
 static uint16_t* video_row_buffer = nullptr;
 static int video_row_cursor = 0;
 static int video_row_y = -1;
 static int video_dst_w = 0, video_dst_h = 0, video_dst_x = 0, video_dst_y = 0;
 static int video_src_w = 0, video_src_h = 0;
 
-// ========== 新增：待做 / 数字网格 / 神秘页面 相关变量 ==========
-int numGridSelectedIndex = 0;                // 3×3 网格当前选中索引（0~8）
-int passwordSequence[6];                     // 密码输入序列
-int passwordIndex = 0;                       // 已输入密码位数
+// ========== 待做 / 数字网格 / 神秘页面 相关变量 ==========
+int numGridSelectedIndex = 0;
+int passwordSequence[6];
+int passwordIndex = 0;
+
+// ========== 英语学习相关变量 ==========
+#define MAX_WORDS 500
+struct WordEntry {
+  String word;
+  String phonetic;
+  String meaning;
+};
+WordEntry englishWords[MAX_WORDS];
+int englishWordCount = 0;
+int englishLearnMode = 0;   // 0=英文模式, 1=中文模式
+int englishWordIndex = 0;
+int englishPhase = 0;       // 0=主面, 1=翻转面
 
 // ---------- 函数声明 ----------
 void scanSD(const char* path);
@@ -167,13 +182,16 @@ void playMJPEGFromFileBrowser(const char* filename);
 bool playOneFrame(File &file, uint8_t *frameBuf, size_t &frameLen, bool &stopFlag);
 void resetParser();
 
-// ---------- 新增函数声明 ----------
 void drawTodoPage();
 void handleTodoPage();
 void drawNumGrid();
 void handleNumGrid();
 void drawMysteryPage();
 void handleMysteryPage();
+
+bool loadEnglishWords();
+void drawEnglishChoose();
+void drawEnglishLearn();
 
 // ---------- 获取下一个照片编号 ----------
 int getNextPhotoIndex() {
@@ -366,7 +384,7 @@ void drawMenu() {
     }
 }
 
-// ========== 摇杆方向读取（菜单）==========
+// ========== 摇杆方向读取 ==========
 void readJoystick() {
     if (millis() - lastMoveTime < moveDelay) return;
     int vrx = analogRead(PIN_VRX);
@@ -483,7 +501,6 @@ void scanSD(const char* path) {
     }
     dir.close();
 
-    // 简单排序
     for (int i = 0; i < fileCount - 1; i++) {
         for (int j = i + 1; j < fileCount; j++) {
             bool swap = false;
@@ -499,8 +516,8 @@ void scanSD(const char* path) {
     Serial.printf("扫描 %s : %d 个条目\n", path, fileCount);
 }
 
-// 帧解析器静态状态（用于playOneFrame）
-static uint8_t parser_state = 0;        // 0:寻找SOI, 1:收集帧
+// 帧解析器状态
+static uint8_t parser_state = 0;
 static size_t parser_bytesInFrame = 0;
 static bool parser_foundFF = false;
 static bool parser_prevWasFF = false;
@@ -512,7 +529,6 @@ void resetParser() {
     parser_prevWasFF = false;
 }
 
-// 从MJPEG文件中提取完整一帧（增强容错版）
 bool playOneFrame(File &file, uint8_t *frameBuf, size_t &frameLen, bool &stopFlag) {
     if (stopFlag) return false;
 
@@ -520,7 +536,6 @@ bool playOneFrame(File &file, uint8_t *frameBuf, size_t &frameLen, bool &stopFla
         uint8_t b = file.read();
 
         if (parser_state == 0) {
-            // 寻找SOI (0xFF, 0xD8)
             if (!parser_foundFF && b == 0xFF) {
                 parser_foundFF = true;
             } else if (parser_foundFF && b == 0xD8) {
@@ -534,10 +549,8 @@ bool playOneFrame(File &file, uint8_t *frameBuf, size_t &frameLen, bool &stopFla
             }
         }
         else if (parser_state == 1) {
-            // 收集帧数据直到找到EOI (0xFF, 0xD9)
             frameBuf[parser_bytesInFrame++] = b;
 
-            // 安全上限：如果超过200KB则放弃
             if (parser_bytesInFrame >= 200 * 1024) {
                 Serial.println("帧过大（>200KB），放弃并重置解析器");
                 parser_state = 0;
@@ -559,7 +572,6 @@ bool playOneFrame(File &file, uint8_t *frameBuf, size_t &frameLen, bool &stopFla
     return false;
 }
 
-// ---------- 视频播放专用回调：收集解码输出，按行推送（无闪烁，低内存）----------
 bool video_tft_output(int16_t x, int16_t y, uint16_t w, uint16_t h, uint16_t* bitmap) {
     if (!video_row_buffer) return true;
     if (video_dst_w <= 0 || video_dst_h <= 0) return true;
@@ -570,14 +582,12 @@ bool video_tft_output(int16_t x, int16_t y, uint16_t w, uint16_t h, uint16_t* bi
         int dst_y = video_dst_y + (src_y * video_dst_h) / video_src_h;
         if (dst_y < 0 || dst_y >= tft.height()) continue;
 
-        // 如果新行的y坐标与上一行不同，则先推送上一行
         if (video_row_y != dst_y && video_row_cursor > 0) {
             tft.pushImage(video_dst_x, video_row_y, video_dst_w, 1, video_row_buffer);
             video_row_cursor = 0;
         }
         video_row_y = dst_y;
 
-        // 将当前解码块中的像素填入行缓冲区
         for (int dx = 0; dx < video_dst_w; dx++) {
             int src_x = (dx * video_src_w) / video_dst_w;
             if (src_x >= x && src_x < x + (int)w) {
@@ -589,7 +599,6 @@ bool video_tft_output(int16_t x, int16_t y, uint16_t w, uint16_t h, uint16_t* bi
     return true;
 }
 
-// ---------- 视频播放主函数（使用行缓冲区，内存占用极小）----------
 void playMJPEGFromFileBrowser(const char* filename) {
     File videoFile = SD.open(filename, FILE_READ);
     if (!videoFile) {
@@ -607,7 +616,6 @@ void playMJPEGFromFileBrowser(const char* filename) {
     delay(1500);
     tft.fillRect(0, 0, tft.width(), 25, TFT_BLACK);
 
-    // 动态分配JPEG帧缓冲区（初始64KB，不够则扩容）
     size_t maxFrameSize = 64 * 1024;
     uint8_t* jpegFrame = (uint8_t*)malloc(maxFrameSize);
     if (!jpegFrame) {
@@ -616,7 +624,6 @@ void playMJPEGFromFileBrowser(const char* filename) {
         return;
     }
 
-    // 分配行缓冲区（只需要一行，内存占用 = 屏幕宽度 * 2 字节）
     int screen_w = tft.width();
     video_row_buffer = (uint16_t*)malloc(screen_w * sizeof(uint16_t));
     if (!video_row_buffer) {
@@ -656,7 +663,6 @@ void playMJPEGFromFileBrowser(const char* filename) {
             continue;
         }
 
-        // 计算缩放参数
         int screen_h = tft.height();
         float scale_w = (float)screen_w / jpgW;
         float scale_h = (float)screen_h / jpgH;
@@ -668,17 +674,14 @@ void playMJPEGFromFileBrowser(const char* filename) {
         video_src_w = jpgW;
         video_src_h = jpgH;
 
-        // 重置行缓冲区状态
         video_row_cursor = 0;
         video_row_y = -1;
 
-        // 解码并逐行推送
         if (TJpgDec.drawJpg(0, 0, jpegFrame, frameLen) != JDR_OK) {
             Serial.println("帧解码失败");
             continue;
         }
 
-        // 推送最后一行
         if (video_row_cursor > 0) {
             tft.pushImage(video_dst_x, video_row_y, video_dst_w, 1, video_row_buffer);
         }
@@ -691,20 +694,17 @@ void playMJPEGFromFileBrowser(const char* filename) {
             lastPrintTime = now;
         }
 
-        // 帧率控制
         uint32_t elapsed = millis() - frameStart;
         if (elapsed < VIDEO_FRAME_DELAY_MS) {
             delay(VIDEO_FRAME_DELAY_MS - elapsed);
         }
 
-        // 检测按键退出
         if (digitalRead(PIN_SW) == LOW) {
             stopPlaying = true;
             break;
         }
     }
 
-    // 恢复原回调并释放资源
     TJpgDec.setCallback(tft_output);
     free(video_row_buffer);
     video_row_buffer = nullptr;
@@ -788,7 +788,7 @@ void drawFileList() {
     }
 }
 
-// ---------- 显示图片（留出底部按钮空间）----------
+// ---------- 显示图片 ----------
 void displaySelectedFile(const char* filepath, bool leaveBottomSpace) {
     File imgFile = SD.open(filepath, FILE_READ);
     if (!imgFile) {
@@ -830,7 +830,7 @@ void displaySelectedFile(const char* filepath, bool leaveBottomSpace) {
     free(jpgBuf);
 }
 
-// ---------- 绘制图片查看时的底部按钮 ----------
+// ---------- 绘制图片底部按钮 ----------
 void drawImageBottomBar() {
     const int btnH = 28;
     const int btnY = tft.height() - btnH - 2;
@@ -911,7 +911,6 @@ void handleStorage() {
     int vrx = analogRead(PIN_VRX);
     int vry = analogRead(PIN_VRY);
 
-    // 删除确认弹框交互
     if (showDeleteConfirm) {
         if (millis() - lastJoyTime > joyDelay) {
             if (vrx < 2048 - joyThreshold) {
@@ -948,7 +947,6 @@ void handleStorage() {
         return;
     }
 
-    // 文件列表模式
     if (!viewingImage) {
         if (millis() - lastJoyTime > joyDelay) {
             bool moved = false;
@@ -1072,7 +1070,6 @@ void handleStorage() {
         return;
     }
 
-    // 图片查看模式
     if (viewingImage && !showDeleteConfirm) {
         if (millis() - lastJoyTime > joyDelay) {
             bool moved = false;
@@ -1185,7 +1182,7 @@ void setup() {
     sprite.pushSprite(0, 0);
 }
 
-// ========== 新增：待做页面绘制 ==========
+// ========== 待做页面 ==========
 void drawTodoPage() {
     sprite.fillScreen(TFT_BLACK);
     sprite.setTextDatum(middle_center);
@@ -1194,7 +1191,6 @@ void drawTodoPage() {
     sprite.drawString("什么也没有", tft.width() / 2, tft.height() / 2);
 }
 
-// ========== 新增：待做页面交互（短按返回菜单，长按3秒进入数字网格）==========
 void handleTodoPage() {
     static unsigned long pressStart = 0;
     static bool wasPressed = false;
@@ -1207,13 +1203,11 @@ void handleTodoPage() {
     }
     else if (!curPressed && wasPressed) {
         if (now - pressStart >= 3000) {
-            // 长按3秒：进入3×3数字网格
             numGridSelectedIndex = 0;
-            passwordIndex = 0;               // 清空密码输入序列
+            passwordIndex = 0;
             currentState = NUM_GRID;
             screenDirty = true;
         } else {
-            // 短按：返回菜单
             currentState = MENU;
             screenDirty = true;
         }
@@ -1221,11 +1215,10 @@ void handleTodoPage() {
     }
 }
 
-// ========== 新增：3×3 数字网格绘制（美化版，独立尺寸，不影响菜单）==========
+// ========== 3×3 数字网格 ==========
 void drawNumGrid() {
     sprite.fillScreen(TFT_BLACK);
 
-    // 与菜单完全一致的选中框颜色风格
     const uint16_t BOX_COLOR_LIGHT_BLUE = sprite.color565(135, 206, 235);
     const uint16_t SELECT_COLOR_YELLOW  = sprite.color565(255, 220, 0);
     const uint16_t TEXT_COLOR_BLACK     = TFT_BLACK;
@@ -1234,12 +1227,10 @@ void drawNumGrid() {
 
     const int gridCols = 3;
     const int gridRows = 3;
-
-    // 【修改】使用独立的网格尺寸，避免与菜单的 boxW/boxH 冲突，适配 320x240 屏幕
-    const int gridBoxW = 72;   // 方框宽度（略小于菜单的90，保证3个不拥挤）
-    const int gridBoxH = 60;   // 方框高度（适配3行 + 间隙在240高度内）
-    const int gridGapX = 20;   // 水平间隙
-    const int gridGapY = 16;   // 垂直间隙
+    const int gridBoxW = 72;
+    const int gridBoxH = 60;
+    const int gridGapX = 20;
+    const int gridGapY = 16;
 
     const int gridTotalWidth = (gridBoxW * gridCols) + (gridGapX * (gridCols - 1));
     const int gridStartX = (tft.width() - gridTotalWidth) / 2;
@@ -1252,7 +1243,6 @@ void drawNumGrid() {
         int x = gridStartX + col * (gridBoxW + gridGapX);
         int y = gridStartY + row * (gridBoxH + gridGapY);
 
-        // 选中框样式完全复刻菜单风格（多层发光边框）
         if (i == numGridSelectedIndex) {
             sprite.fillRoundRect(x, y, gridBoxW, gridBoxH, 8, SELECT_COLOR_YELLOW);
             sprite.drawRoundRect(x - 2, y - 2, gridBoxW + 4, gridBoxH + 4, 10, sprite.color565(255,200,0));
@@ -1270,9 +1260,7 @@ void drawNumGrid() {
     }
 }
 
-// ========== 新增：3×3 数字网格交互（摇杆移动、短按记录密码、长按退出）==========
 void handleNumGrid() {
-    // --- 摇杆移动（使用局部延时避免卡键）---
     static unsigned long lastJoyTime = 0;
     const unsigned long joyDelay = 200;
     if (millis() - lastJoyTime > joyDelay) {
@@ -1293,11 +1281,10 @@ void handleNumGrid() {
             numGridSelectedIndex = row * gridCols + col;
             lastJoyTime = millis();
             drawNumGrid();
-            sprite.pushSprite(0, 0);       // 立即刷新
+            sprite.pushSprite(0, 0);
         }
     }
 
-    // --- 按钮处理（短按记录数字，长按退出）---
     static unsigned long pressStart = 0;
     static bool wasPressed = false;
     bool curPressed = (digitalRead(PIN_SW) == LOW);
@@ -1309,17 +1296,14 @@ void handleNumGrid() {
     }
     else if (!curPressed && wasPressed) {
         if (now - pressStart >= 3000) {
-            // 长按3秒：退出数字网格，回到待做页面
             currentState = TODO_PAGE;
             screenDirty = true;
-            passwordIndex = 0;             // 清空输入序列
+            passwordIndex = 0;
         } else {
-            // 短按：记录当前选中的数字（1~9）
             int digit = numGridSelectedIndex + 1;
             if (passwordIndex < 6) {
                 passwordSequence[passwordIndex] = digit;
                 passwordIndex++;
-                // 如果输入满6位，检查密码
                 if (passwordIndex == 6) {
                     const int correct[6] = {1, 1, 4, 5, 1, 4};
                     bool match = true;
@@ -1330,11 +1314,9 @@ void handleNumGrid() {
                         }
                     }
                     if (match) {
-                        // 密码正确 → 进入神秘页面
                         currentState = MYSTERY_PAGE;
                         screenDirty = true;
                     }
-                    // 无论正确与否，清空序列以便重新输入
                     passwordIndex = 0;
                 }
             }
@@ -1342,7 +1324,6 @@ void handleNumGrid() {
         wasPressed = false;
     }
 
-    // 首次进入或 screenDirty 时刷新画面
     if (screenDirty) {
         drawNumGrid();
         sprite.pushSprite(0, 0);
@@ -1350,7 +1331,7 @@ void handleNumGrid() {
     }
 }
 
-// ========== 新增：神秘页面绘制（长方形框 + 标题）==========
+// ========== 神秘页面 ==========
 void drawMysteryPage() {
     sprite.fillScreen(TFT_BLACK);
     const int boxW = 200;
@@ -1367,7 +1348,6 @@ void drawMysteryPage() {
     sprite.drawString("神秘小页面", tft.width() / 2, tft.height() / 2);
 }
 
-// ========== 新增：神秘页面交互（短按返回菜单）==========
 void handleMysteryPage() {
     static bool wasPressed = false;
     bool curPressed = (digitalRead(PIN_SW) == LOW);
@@ -1381,9 +1361,277 @@ void handleMysteryPage() {
     }
 }
 
-// ========== 主循环（新增状态处理，其余完全不变）==========
+// ========== 英语功能实现（流式解析，不吃内存）==========
+bool loadEnglishWords() {
+    englishWordCount = 0;
+    if (!SD.cardType()) {
+        Serial.println("SD卡未初始化，无法读取单词");
+        return false;
+    }
+
+    // 直接打开已确认存在的路径
+    const char* filepath = "/english/book.txt";
+    if (!SD.exists(filepath)) {
+        Serial.printf("文件不存在: %s\n", filepath);
+        return false;
+    }
+
+    File file = SD.open(filepath, FILE_READ);
+    if (!file) {
+        Serial.printf("打开文件失败: %s\n", filepath);
+        return false;
+    }
+
+    size_t fsize = file.size();
+    Serial.printf("单词文件大小: %u 字节\n", fsize);
+
+    // 使用 PSRAM 一次性读入整个文件
+    char* buf = (char*)heap_caps_malloc(fsize + 1, MALLOC_CAP_SPIRAM);
+    if (!buf) {
+        // 如果 PSRAM 分配失败（极少见），尝试普通内存
+        buf = (char*)malloc(fsize + 1);
+    }
+    if (!buf) {
+        Serial.println("内存不足，无法加载单词文件！");
+        file.close();
+        return false;
+    }
+
+    size_t readBytes = file.readBytes(buf, fsize);
+    buf[readBytes] = '\0';   // 确保字符串结尾
+    file.close();
+
+    Serial.println("开始解析...");
+
+    char* p = buf;
+    while (*p && englishWordCount < MAX_WORDS) {
+        // 跳过空白字符
+        while (*p && isspace(*p)) p++;
+        if (*p == '\0') break;
+
+        // 单词必须以字母开头
+        if (!isalpha(*p)) { p++; continue; }
+
+        // 1. 提取单词（从当前位置到 '['）
+        char* wordStart = p;
+        while (*p && *p != '[') p++;
+        if (*p != '[') break;   // 格式错误，退出
+        *p = '\0';              // 临时截断单词字符串
+        String word = wordStart;
+        *p = '[';               // 恢复原字符
+        p++;                    // 跳过 '['
+
+        // 2. 提取音标（从当前位置到 ']'）
+        char* phoneticStart = p;
+        while (*p && *p != ']') p++;
+        if (*p != ']') break;   // 格式错误
+        *p = '\0';
+        String phonetic = phoneticStart;
+        *p = ']';
+        p++;                    // 跳过 ']'
+
+        // 3. 提取释义（从当前位置到下一个 '[' 或字符串结尾）
+        char* meaningStart = p;
+        char* nextBracket = strchr(p, '[');
+        if (nextBracket) {
+            // 有下一个单词
+            *nextBracket = '\0';
+            String meaning = meaningStart;
+            meaning.trim();
+            *nextBracket = '[';
+
+            // 存储单词
+            englishWords[englishWordCount].word = word;
+            englishWords[englishWordCount].phonetic = phonetic;
+            englishWords[englishWordCount].meaning = meaning;
+            englishWordCount++;
+
+            // 移动指针到下一个单词的 '[' 前，准备下一轮
+            p = nextBracket;
+        } else {
+            // 最后一个单词，释义到字符串结尾
+            String meaning = meaningStart;
+            meaning.trim();
+            englishWords[englishWordCount].word = word;
+            englishWords[englishWordCount].phonetic = phonetic;
+            englishWords[englishWordCount].meaning = meaning;
+            englishWordCount++;
+            break;
+        }
+
+        // 每 100 个单词输出一次进度
+        if (englishWordCount % 100 == 0) {
+            Serial.printf("已解析 %d 个单词...\n", englishWordCount);
+        }
+    }
+
+    free(buf);
+    Serial.printf("解析完成，共 %d 个单词\n", englishWordCount);
+    return englishWordCount > 0;
+}
+
+void drawEnglishChoose() {
+    sprite.fillScreen(TFT_BLACK);
+    const uint16_t BOX_COLOR = sprite.color565(135, 206, 235);
+    const uint16_t SEL_COLOR = TFT_YELLOW;
+    const uint16_t TEXT_COLOR = TFT_BLACK;
+    const uint16_t BORDER     = TFT_WHITE;
+    sprite.setFont(&fonts::efontCN_16);
+
+    const int btnW = 90, btnH = 60, gap = 30;
+    const int totalW = 2 * btnW + gap;
+    const int startX = (tft.width() - totalW) / 2;
+    const int startY = (tft.height() - btnH) / 2;
+
+    const char* labels[2] = {"中文", "英文"};
+
+    for (int i = 0; i < 2; i++) {
+        int x = startX + i * (btnW + gap);
+        bool sel = (i == englishLearnMode);
+        if (sel) {
+            sprite.fillRoundRect(x, startY, btnW, btnH, 8, SEL_COLOR);
+            sprite.drawRoundRect(x-2, startY-2, btnW+4, btnH+4, 10, sprite.color565(255,200,0));
+            sprite.drawRoundRect(x, startY, btnW, btnH, 8, BORDER);
+        } else {
+            sprite.fillRoundRect(x, startY, btnW, btnH, 8, BOX_COLOR);
+            sprite.drawRoundRect(x, startY, btnW, btnH, 8, BORDER);
+        }
+        sprite.setTextDatum(middle_center);
+        sprite.setTextColor(TEXT_COLOR);
+        sprite.drawString(labels[i], x + btnW/2, startY + btnH/2);
+    }
+}
+
+void drawEnglishLearn() {
+    sprite.fillScreen(TFT_BLACK);
+    if (englishWordCount == 0) return;
+
+    WordEntry &w = englishWords[englishWordIndex];
+    String line1, line2;
+
+    if (englishLearnMode == 0) {
+        if (englishPhase == 0) {
+            line1 = w.word;
+            line2 = "[" + w.phonetic + "]";
+        } else {
+            line1 = w.meaning;
+            line2 = "";
+        }
+    } else {
+        if (englishPhase == 0) {
+            line1 = w.meaning;
+            line2 = "";
+        } else {
+            line1 = w.word;
+            line2 = "[" + w.phonetic + "]";
+        }
+    }
+
+    sprite.setTextDatum(middle_center);
+    sprite.setFont(&fonts::FreeSansBold18pt7b);
+    sprite.setTextColor(TFT_WHITE);
+    sprite.drawString(line1, tft.width()/2, tft.height()/2 - 20);
+
+    if (line2.length() > 0) {
+        sprite.setFont(&fonts::efontCN_16);
+        sprite.setTextColor(TFT_LIGHTGREY);
+        sprite.drawString(line2, tft.width()/2, tft.height()/2 + 30);
+    }
+
+    sprite.setFont(&fonts::efontCN_12);
+    sprite.setTextColor(TFT_DARKGREY);
+    sprite.drawString(String(englishWordIndex+1) + "/" + String(englishWordCount), tft.width()/2, tft.height() - 15);
+}
+
+// ========== 主循环 ==========
 void loop() {
-    // --- 新增状态优先处理，避免干扰原有 isSWPressed 逻辑 ---
+    // 英语选择界面
+    if (currentState == ENGLISH_CHOOSE) {
+        static unsigned long lastJoyTime = 0;
+        if (millis() - lastJoyTime > moveDelay) {
+            int vrx = analogRead(PIN_VRX);
+            if (vrx < 2048 - joyThreshold) {
+                englishLearnMode = (englishLearnMode - 1 + 2) % 2;
+                lastJoyTime = millis();
+                screenDirty = true;
+            } else if (vrx > 2048 + joyThreshold) {
+                englishLearnMode = (englishLearnMode + 1) % 2;
+                lastJoyTime = millis();
+                screenDirty = true;
+            }
+        }
+
+        static bool btnWasPressed = false;
+        bool curPressed = (digitalRead(PIN_SW) == LOW);
+        if (curPressed && !btnWasPressed) {
+            btnWasPressed = true;
+        } else if (!curPressed && btnWasPressed) {
+            btnWasPressed = false;
+            englishWordIndex = 0;
+            englishPhase = 0;
+            currentState = ENGLISH_LEARN;
+            screenDirty = true;
+        }
+
+        if (screenDirty) {
+            drawEnglishChoose();
+            sprite.pushSprite(0, 0);
+            screenDirty = false;
+        }
+        delay(10);
+        return;
+    }
+
+    // 英语学习界面
+    if (currentState == ENGLISH_LEARN) {
+        static unsigned long lastJoyTime = 0;
+        if (millis() - lastJoyTime > moveDelay) {
+            int vrx = analogRead(PIN_VRX);
+            if (vrx > 2048 + joyThreshold) {
+                if (englishPhase == 0) {
+                    englishPhase = 1;
+                } else {
+                    englishPhase = 0;
+                    if (englishWordIndex < englishWordCount - 1) {
+                        englishWordIndex++;
+                    }
+                }
+                lastJoyTime = millis();
+                screenDirty = true;
+            } else if (vrx < 2048 - joyThreshold) {
+                if (englishPhase == 1) {
+                    englishPhase = 0;
+                } else {
+                    if (englishWordIndex > 0) {
+                        englishWordIndex--;
+                        englishPhase = 1;
+                    }
+                }
+                lastJoyTime = millis();
+                screenDirty = true;
+            }
+        }
+
+        static bool btnWasPressed = false;
+        bool curPressed = (digitalRead(PIN_SW) == LOW);
+        if (curPressed && !btnWasPressed) {
+            btnWasPressed = true;
+        } else if (!curPressed && btnWasPressed) {
+            btnWasPressed = false;
+            currentState = ENGLISH_CHOOSE;
+            screenDirty = true;
+        }
+
+        if (screenDirty) {
+            drawEnglishLearn();
+            sprite.pushSprite(0, 0);
+            screenDirty = false;
+        }
+        delay(10);
+        return;
+    }
+
+    // --- 原有其他状态处理 ---
     if (currentState == TODO_PAGE) {
         handleTodoPage();
         if (screenDirty) {
@@ -1410,7 +1658,6 @@ void loop() {
         return;
     }
 
-    // --- 原有逻辑，完全不变 ---
     if (currentState != CAMERA && currentState != STORAGE && isSWPressed()) {
         if (currentState == HOME) {
             currentState = MENU;
@@ -1440,6 +1687,23 @@ void loop() {
                 showDeleteConfirm = false;
                 screenDirty = true;
                 tft.fillScreen(TFT_BLACK);
+            }
+            else if (selectedIndex == 4) {
+                // 英语功能
+                if (loadEnglishWords()) {
+                    englishLearnMode = 1;
+                    currentState = ENGLISH_CHOOSE;
+                    screenDirty = true;
+                } else {
+                    tft.fillScreen(TFT_BLACK);
+                    tft.setTextColor(TFT_RED);
+                    tft.setFont(&fonts::efontCN_16);
+                    tft.setTextDatum(middle_center);
+                    tft.drawString("单词加载失败", tft.width()/2, tft.height()/2);
+                    delay(1500);
+                    currentState = MENU;
+                    screenDirty = true;
+                }
             }
             else if (selectedIndex == 5) {
                 currentState = TODO_PAGE;
