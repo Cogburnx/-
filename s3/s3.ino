@@ -65,8 +65,11 @@ LGFX tft;
 LGFX_Sprite sprite(&tft);
 HardwareSerial SerialCam(1);
 
-// ========== UI 状态 ==========
-enum UIState { HOME, MENU, CAMERA, STORAGE };
+// ========== UI 状态（新增 TODO_PAGE, NUM_GRID, MYSTERY_PAGE）==========
+enum UIState { HOME, MENU, CAMERA, STORAGE,
+               TODO_PAGE,       // 新增：待做页面（黑底白字“什么也没有”）
+               NUM_GRID,        // 新增：3×3 数字网格（密码输入）
+               MYSTERY_PAGE };  // 新增：神秘小页面
 UIState currentState = HOME;
 
 int selectedIndex = 0;
@@ -104,7 +107,7 @@ int imageBottomBtnIndex = 0;
 bool showDeleteConfirm = false;
 int deleteConfirmSelection = 0;
 
-// ========== 菜单布局 ==========
+// ========== 菜单布局（保持不变）==========
 const int boxW = 90;
 const int boxH = 70;
 const int boxGapX = 12;
@@ -114,7 +117,8 @@ const int startX = (320 - boxesTotalWidth) / 2;
 const int boxesTotalHeight = (boxH * rows) + boxGapY;
 const int startY = (240 - boxesTotalHeight) / 2;
 
-const char* menuTexts[] = { "搜索", "拍摄", "存储", "语文", "英语", "对话" };
+// --- 修改：菜单文本“对话” → “待做” ---
+const char* menuTexts[] = { "搜索", "拍摄", "存储", "语文", "英语", "待做" };
 
 // ========== 摄像头相关变量 ==========
 #define MAX_SIZE 30000
@@ -146,6 +150,11 @@ static int video_row_y = -1;
 static int video_dst_w = 0, video_dst_h = 0, video_dst_x = 0, video_dst_y = 0;
 static int video_src_w = 0, video_src_h = 0;
 
+// ========== 新增：待做 / 数字网格 / 神秘页面 相关变量 ==========
+int numGridSelectedIndex = 0;                // 3×3 网格当前选中索引（0~8）
+int passwordSequence[6];                     // 密码输入序列
+int passwordIndex = 0;                       // 已输入密码位数
+
 // ---------- 函数声明 ----------
 void scanSD(const char* path);
 void drawFileList();
@@ -157,6 +166,14 @@ void deleteFile(const char* filepath);
 void playMJPEGFromFileBrowser(const char* filename);
 bool playOneFrame(File &file, uint8_t *frameBuf, size_t &frameLen, bool &stopFlag);
 void resetParser();
+
+// ---------- 新增函数声明 ----------
+void drawTodoPage();
+void handleTodoPage();
+void drawNumGrid();
+void handleNumGrid();
+void drawMysteryPage();
+void handleMysteryPage();
 
 // ---------- 获取下一个照片编号 ----------
 int getNextPhotoIndex() {
@@ -1168,8 +1185,232 @@ void setup() {
     sprite.pushSprite(0, 0);
 }
 
-// ========== 主循环 ==========
+// ========== 新增：待做页面绘制 ==========
+void drawTodoPage() {
+    sprite.fillScreen(TFT_BLACK);
+    sprite.setTextDatum(middle_center);
+    sprite.setTextColor(TFT_WHITE);
+    sprite.setFont(&fonts::efontCN_16);
+    sprite.drawString("什么也没有", tft.width() / 2, tft.height() / 2);
+}
+
+// ========== 新增：待做页面交互（短按返回菜单，长按3秒进入数字网格）==========
+void handleTodoPage() {
+    static unsigned long pressStart = 0;
+    static bool wasPressed = false;
+    bool curPressed = (digitalRead(PIN_SW) == LOW);
+    unsigned long now = millis();
+
+    if (curPressed && !wasPressed) {
+        pressStart = now;
+        wasPressed = true;
+    }
+    else if (!curPressed && wasPressed) {
+        if (now - pressStart >= 3000) {
+            // 长按3秒：进入3×3数字网格
+            numGridSelectedIndex = 0;
+            passwordIndex = 0;               // 清空密码输入序列
+            currentState = NUM_GRID;
+            screenDirty = true;
+        } else {
+            // 短按：返回菜单
+            currentState = MENU;
+            screenDirty = true;
+        }
+        wasPressed = false;
+    }
+}
+
+// ========== 新增：3×3 数字网格绘制（美化版，独立尺寸，不影响菜单）==========
+void drawNumGrid() {
+    sprite.fillScreen(TFT_BLACK);
+
+    // 与菜单完全一致的选中框颜色风格
+    const uint16_t BOX_COLOR_LIGHT_BLUE = sprite.color565(135, 206, 235);
+    const uint16_t SELECT_COLOR_YELLOW  = sprite.color565(255, 220, 0);
+    const uint16_t TEXT_COLOR_BLACK     = TFT_BLACK;
+    const uint16_t BORDER_WHITE         = TFT_WHITE;
+    sprite.setFont(&fonts::efontCN_16);
+
+    const int gridCols = 3;
+    const int gridRows = 3;
+
+    // 【修改】使用独立的网格尺寸，避免与菜单的 boxW/boxH 冲突，适配 320x240 屏幕
+    const int gridBoxW = 72;   // 方框宽度（略小于菜单的90，保证3个不拥挤）
+    const int gridBoxH = 60;   // 方框高度（适配3行 + 间隙在240高度内）
+    const int gridGapX = 20;   // 水平间隙
+    const int gridGapY = 16;   // 垂直间隙
+
+    const int gridTotalWidth = (gridBoxW * gridCols) + (gridGapX * (gridCols - 1));
+    const int gridStartX = (tft.width() - gridTotalWidth) / 2;
+    const int gridTotalHeight = (gridBoxH * gridRows) + (gridGapY * (gridRows - 1));
+    const int gridStartY = (tft.height() - gridTotalHeight) / 2;
+
+    for (int i = 0; i < 9; i++) {
+        int col = i % gridCols;
+        int row = i / gridCols;
+        int x = gridStartX + col * (gridBoxW + gridGapX);
+        int y = gridStartY + row * (gridBoxH + gridGapY);
+
+        // 选中框样式完全复刻菜单风格（多层发光边框）
+        if (i == numGridSelectedIndex) {
+            sprite.fillRoundRect(x, y, gridBoxW, gridBoxH, 8, SELECT_COLOR_YELLOW);
+            sprite.drawRoundRect(x - 2, y - 2, gridBoxW + 4, gridBoxH + 4, 10, sprite.color565(255,200,0));
+            sprite.drawRoundRect(x - 4, y - 4, gridBoxW + 8, gridBoxH + 8, 12, sprite.color565(255,180,0));
+            sprite.drawRoundRect(x - 6, y - 6, gridBoxW +12, gridBoxH +12, 14, sprite.color565(255,160,0));
+            sprite.drawRoundRect(x - 8, y - 8, gridBoxW +16, gridBoxH +16, 16, sprite.color565(255,140,0));
+            sprite.drawRoundRect(x, y, gridBoxW, gridBoxH, 8, BORDER_WHITE);
+        } else {
+            sprite.fillRoundRect(x, y, gridBoxW, gridBoxH, 8, BOX_COLOR_LIGHT_BLUE);
+            sprite.drawRoundRect(x, y, gridBoxW, gridBoxH, 8, BORDER_WHITE);
+        }
+        sprite.setTextDatum(middle_center);
+        sprite.setTextColor(TEXT_COLOR_BLACK);
+        sprite.drawString(String(i + 1), x + gridBoxW/2, y + gridBoxH/2);
+    }
+}
+
+// ========== 新增：3×3 数字网格交互（摇杆移动、短按记录密码、长按退出）==========
+void handleNumGrid() {
+    // --- 摇杆移动（使用局部延时避免卡键）---
+    static unsigned long lastJoyTime = 0;
+    const unsigned long joyDelay = 200;
+    if (millis() - lastJoyTime > joyDelay) {
+        int vrx = analogRead(PIN_VRX);
+        int vry = analogRead(PIN_VRY);
+        const int gridCols = 3;
+        const int gridRows = 3;
+        int col = numGridSelectedIndex % gridCols;
+        int row = numGridSelectedIndex / gridCols;
+        bool moved = false;
+
+        if (vrx < 2048 - joyThreshold) { col = (col - 1 + gridCols) % gridCols; moved = true; }
+        else if (vrx > 2048 + joyThreshold) { col = (col + 1) % gridCols; moved = true; }
+        if (vry < 2048 - joyThreshold) { row = (row - 1 + gridRows) % gridRows; moved = true; }
+        else if (vry > 2048 + joyThreshold) { row = (row + 1) % gridRows; moved = true; }
+
+        if (moved) {
+            numGridSelectedIndex = row * gridCols + col;
+            lastJoyTime = millis();
+            drawNumGrid();
+            sprite.pushSprite(0, 0);       // 立即刷新
+        }
+    }
+
+    // --- 按钮处理（短按记录数字，长按退出）---
+    static unsigned long pressStart = 0;
+    static bool wasPressed = false;
+    bool curPressed = (digitalRead(PIN_SW) == LOW);
+    unsigned long now = millis();
+
+    if (curPressed && !wasPressed) {
+        pressStart = now;
+        wasPressed = true;
+    }
+    else if (!curPressed && wasPressed) {
+        if (now - pressStart >= 3000) {
+            // 长按3秒：退出数字网格，回到待做页面
+            currentState = TODO_PAGE;
+            screenDirty = true;
+            passwordIndex = 0;             // 清空输入序列
+        } else {
+            // 短按：记录当前选中的数字（1~9）
+            int digit = numGridSelectedIndex + 1;
+            if (passwordIndex < 6) {
+                passwordSequence[passwordIndex] = digit;
+                passwordIndex++;
+                // 如果输入满6位，检查密码
+                if (passwordIndex == 6) {
+                    const int correct[6] = {1, 1, 4, 5, 1, 4};
+                    bool match = true;
+                    for (int i = 0; i < 6; i++) {
+                        if (passwordSequence[i] != correct[i]) {
+                            match = false;
+                            break;
+                        }
+                    }
+                    if (match) {
+                        // 密码正确 → 进入神秘页面
+                        currentState = MYSTERY_PAGE;
+                        screenDirty = true;
+                    }
+                    // 无论正确与否，清空序列以便重新输入
+                    passwordIndex = 0;
+                }
+            }
+        }
+        wasPressed = false;
+    }
+
+    // 首次进入或 screenDirty 时刷新画面
+    if (screenDirty) {
+        drawNumGrid();
+        sprite.pushSprite(0, 0);
+        screenDirty = false;
+    }
+}
+
+// ========== 新增：神秘页面绘制（长方形框 + 标题）==========
+void drawMysteryPage() {
+    sprite.fillScreen(TFT_BLACK);
+    const int boxW = 200;
+    const int boxH = 120;
+    int boxX = (tft.width() - boxW) / 2;
+    int boxY = (tft.height() - boxH) / 2;
+
+    sprite.fillRoundRect(boxX, boxY, boxW, boxH, 12, sprite.color565(30, 30, 30));
+    sprite.drawRoundRect(boxX, boxY, boxW, boxH, 12, TFT_WHITE);
+
+    sprite.setTextDatum(middle_center);
+    sprite.setTextColor(TFT_WHITE);
+    sprite.setFont(&fonts::efontCN_16);
+    sprite.drawString("神秘小页面", tft.width() / 2, tft.height() / 2);
+}
+
+// ========== 新增：神秘页面交互（短按返回菜单）==========
+void handleMysteryPage() {
+    static bool wasPressed = false;
+    bool curPressed = (digitalRead(PIN_SW) == LOW);
+
+    if (curPressed && !wasPressed) {
+        wasPressed = true;
+    } else if (!curPressed && wasPressed) {
+        currentState = MENU;
+        screenDirty = true;
+        wasPressed = false;
+    }
+}
+
+// ========== 主循环（新增状态处理，其余完全不变）==========
 void loop() {
+    // --- 新增状态优先处理，避免干扰原有 isSWPressed 逻辑 ---
+    if (currentState == TODO_PAGE) {
+        handleTodoPage();
+        if (screenDirty) {
+            drawTodoPage();
+            sprite.pushSprite(0, 0);
+            screenDirty = false;
+        }
+        delay(10);
+        return;
+    }
+    if (currentState == NUM_GRID) {
+        handleNumGrid();
+        delay(10);
+        return;
+    }
+    if (currentState == MYSTERY_PAGE) {
+        handleMysteryPage();
+        if (screenDirty) {
+            drawMysteryPage();
+            sprite.pushSprite(0, 0);
+            screenDirty = false;
+        }
+        delay(10);
+        return;
+    }
+
+    // --- 原有逻辑，完全不变 ---
     if (currentState != CAMERA && currentState != STORAGE && isSWPressed()) {
         if (currentState == HOME) {
             currentState = MENU;
@@ -1199,6 +1440,10 @@ void loop() {
                 showDeleteConfirm = false;
                 screenDirty = true;
                 tft.fillScreen(TFT_BLACK);
+            }
+            else if (selectedIndex == 5) {
+                currentState = TODO_PAGE;
+                screenDirty = true;
             }
             else {
                 currentState = HOME;
