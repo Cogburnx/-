@@ -140,6 +140,10 @@ uint32_t len = 0, idx = 0;
 bool ready = false;
 uint16_t* img_rgb565 = nullptr;
 uint16_t jpg_width = 0, jpg_height = 0;
+static uint16_t* camera_preview_buffer = nullptr;
+static size_t camera_preview_capacity = 0;
+static uint16_t camera_preview_width = 0;
+static uint16_t camera_preview_height = 0;
 
 #define SWAP_BYTES true
 #define FULLSCREEN_CROP false
@@ -320,6 +324,9 @@ void drawEnglishChoose();
 void drawEnglishLearn();
 
 void splitTextIntoLines(const String &text, int maxWidth, std::vector<String> &lines);
+bool ensureCameraPreviewBuffer(uint16_t w, uint16_t h);
+void releaseCameraPreviewBuffer();
+bool camera_preview_output(int16_t x, int16_t y, uint16_t w, uint16_t h, uint16_t* bitmap);
 
 // 飞机游戏
 void initGame();
@@ -390,6 +397,47 @@ bool tft_output(int16_t x, int16_t y, uint16_t w, uint16_t h, uint16_t* bitmap) 
     if (!img_rgb565) return true;
     for (uint16_t row = 0; row < h; row++) {
         memcpy(img_rgb565 + (y + row) * jpg_width + x,
+               bitmap + row * w,
+               w * sizeof(uint16_t));
+    }
+    return true;
+}
+
+bool ensureCameraPreviewBuffer(uint16_t w, uint16_t h) {
+    size_t required = (size_t)w * h * sizeof(uint16_t);
+    if (required == 0) return false;
+
+    if (camera_preview_buffer && camera_preview_capacity >= required) {
+        camera_preview_width = w;
+        camera_preview_height = h;
+        return true;
+    }
+
+    releaseCameraPreviewBuffer();
+    camera_preview_buffer = (uint16_t*)heap_caps_malloc(required, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!camera_preview_buffer) camera_preview_buffer = (uint16_t*)malloc(required);
+    if (!camera_preview_buffer) return false;
+
+    camera_preview_capacity = required;
+    camera_preview_width = w;
+    camera_preview_height = h;
+    return true;
+}
+
+void releaseCameraPreviewBuffer() {
+    if (camera_preview_buffer) {
+        free(camera_preview_buffer);
+        camera_preview_buffer = nullptr;
+    }
+    camera_preview_capacity = 0;
+    camera_preview_width = 0;
+    camera_preview_height = 0;
+}
+
+bool camera_preview_output(int16_t x, int16_t y, uint16_t w, uint16_t h, uint16_t* bitmap) {
+    if (!camera_preview_buffer) return true;
+    for (uint16_t row = 0; row < h; row++) {
+        memcpy(camera_preview_buffer + (y + row) * camera_preview_width + x,
                bitmap + row * w,
                w * sizeof(uint16_t));
     }
@@ -468,11 +516,11 @@ void handleCamera() {
         }
 
         if (TJpgDec.getJpgSize(&jpg_width, &jpg_height, buf, len) == JDR_OK) {
-            size_t buf_size = jpg_width * jpg_height * sizeof(uint16_t);
-            img_rgb565 = (uint16_t*)heap_caps_malloc(buf_size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-            if (!img_rgb565) img_rgb565 = (uint16_t*)malloc(buf_size);
-            if (img_rgb565) {
+            if (ensureCameraPreviewBuffer(jpg_width, jpg_height)) {
+                TJpgDec.setCallback(camera_preview_output);
                 TJpgDec.drawJpg(0, 0, buf, len);
+                TJpgDec.setCallback(tft_output);
+
                 int screen_w = tft.width();
                 int screen_h = tft.height();
                 float scale_w = (float)screen_w / jpg_width;
@@ -482,14 +530,11 @@ void handleCamera() {
                 int dst_h = jpg_height * scale;
                 int dst_x = (screen_w - dst_w) / 2;
                 int dst_y = (screen_h - dst_h) / 2;
-                draw_scaled_image(img_rgb565, jpg_width, jpg_height, dst_x, dst_y, dst_w, dst_h);
+                draw_scaled_image(camera_preview_buffer, jpg_width, jpg_height, dst_x, dst_y, dst_w, dst_h);
 
                 tft.setTextColor(TFT_WHITE, TFT_BLACK);
                 tft.setCursor(5, tft.height() - 10);
                 tft.printf("FPS: %u", frameCount - lastFrameCount);
-
-                free(img_rgb565);
-                img_rgb565 = nullptr;
             }
         }
 
@@ -602,6 +647,7 @@ void handleCameraButtons() {
             sof = eof = idx = 0;
             ready = false;
             captureRequest = false;
+            releaseCameraPreviewBuffer();
             wasPressed = false;
             Serial.println("长按退出相机");
         }
