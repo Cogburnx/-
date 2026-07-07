@@ -1014,6 +1014,10 @@ void displaySelectedFile(const char* filepath, bool leaveBottomSpace) {
 
     uint16_t jpg_w, jpg_h;
     if (TJpgDec.getJpgSize(&jpg_w, &jpg_h, jpgBuf, fileSize) != JDR_OK) { free(jpgBuf); return; }
+    // tft_output() uses global jpg_width/jpg_height when writing decode output.
+    // Keep globals in sync here, otherwise direct image viewing after boot can be corrupted.
+    jpg_width = jpg_w;
+    jpg_height = jpg_h;
 
     size_t rgbSize = jpg_w * jpg_h * sizeof(uint16_t);
     img_rgb565 = (uint16_t*)heap_caps_malloc(rgbSize, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
