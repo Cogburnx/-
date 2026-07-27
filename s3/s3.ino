@@ -6,36 +6,36 @@
 #include <SD.h>
 #include <ctype.h>
 #include <vector>
-#include <queue>       // 用于扫雷 flood fill
+#include <queue>       // 鐢ㄤ簬鎵�闆� flood fill
 
-// ========== 屏幕引脚 ==========
+// ========== 灞忓箷寮曡剼 ==========
 #define PIN_SCK  12
 #define PIN_SDA  11
 #define PIN_CS   10
 #define PIN_DC   9
 #define PIN_RST  8
 
-// ========== 摇杆引脚 ==========
+// ========== 鎽囨潌寮曡剼 ==========
 #define PIN_VRX  4
 #define PIN_VRY  5
 #define PIN_SW   6
 
-// ========== 摄像头串口引�?==========
+// ========== 鎽勫儚澶翠覆鍙ｅ紩鑴?==========
 #define CAM_RX   17
 #define CAM_TX   16
 
-// ========== TF卡引�?(SPI3) ==========
+// ========== TF鍗″紩鑴?(SPI3) ==========
 #define SD_SCK   18
 #define SD_MISO  19
 #define SD_MOSI  14
 #define SD_CS    13
 SPIClass sdSPI(HSPI);
 
-// ========== 视频播放参数 ==========
+// ========== 瑙嗛�戞挱鏀惧弬鏁� ==========
 #define VIDEO_FPS 12
 #define VIDEO_FRAME_DELAY_MS (1000 / VIDEO_FPS)
 
-// ---------- 屏幕驱动 ----------
+// ---------- 灞忓箷椹卞姩 ----------
 class LGFX : public lgfx::LGFX_Device {
     lgfx::Panel_ST7789 panel;
     lgfx::Bus_SPI bus;
@@ -68,7 +68,7 @@ LGFX tft;
 LGFX_Sprite sprite(&tft);
 HardwareSerial SerialCam(1);
 
-// ========== UI 状�?==========
+// ========== UI 鐘舵�?==========
 enum UIState { HOME, MENU, CAMERA, STORAGE,
                TODO_PAGE,
                NUM_GRID,
@@ -96,7 +96,7 @@ const unsigned long btnDelay = 300;
 int lastSWState = HIGH;
 bool screenDirty = true;
 
-// ========== 文件浏览相关变量 ==========
+// ========== 鏂囦欢娴忚�堢浉鍏冲彉閲� ==========
 #define MAX_FILES 50
 #define MAX_DEPTH 5
 String currentPath = "/";
@@ -125,7 +125,7 @@ int imageBottomBtnIndex = 0;
 bool showDeleteConfirm = false;
 int deleteConfirmSelection = 0;
 
-// ========== 菜单布局 ==========
+// ========== 鑿滃崟甯冨眬 ==========
 const int boxW = 90;
 const int boxH = 70;
 const int boxGapX = 12;
@@ -135,9 +135,16 @@ const int startX = (320 - boxesTotalWidth) / 2;
 const int boxesTotalHeight = (boxH * rows) + boxGapY;
 const int startY = (240 - boxesTotalHeight) / 2;
 
-const char* menuTexts[] = { "搜索", "拍摄", "存储", "语文", "英语", "待做" };
+const char* menuTexts[] = {
+    u8"\u7f51\u7ad9",
+    u8"\u62cd\u6444",
+    u8"\u5b58\u50a8",
+    u8"\u8bed\u6587",
+    u8"\u82f1\u8bed",
+    u8"\u5f85\u505a"
+};
 
-// ========== 摄像头相关变�?==========
+// ========== 鎽勫儚澶寸浉鍏冲彉閲?==========
 #define MAX_SIZE 30000
 uint8_t buf[MAX_SIZE];
 enum { WAIT_SOF, WAIT_LEN, WAIT_DATA, WAIT_EOF } state = WAIT_SOF;
@@ -155,33 +162,33 @@ static uint16_t camera_preview_height = 0;
 #define SWAP_BYTES true
 #define FULLSCREEN_CROP false
 
-// ========== 拍照功能 ==========
+// ========== 鎷嶇収鍔熻兘 ==========
 int photoIndex = 0;
 bool captureRequest = false;
 
-// ========== 帧率统计 ==========
+// ========== 甯х巼缁熻�� ==========
 unsigned long lastFpsPrint = 0;
 uint32_t frameCount = 0;
 uint32_t lastFrameCount = 0;
 
-// ---------- 视频播放全局变量 ----------
+// ---------- 瑙嗛�戞挱鏀惧叏灞�鍙橀噺 ----------
 static uint16_t* video_row_buffer = nullptr;
 static int video_row_cursor = 0;
 static int video_row_y = -1;
 static int video_dst_w = 0, video_dst_h = 0, video_dst_x = 0, video_dst_y = 0;
 static int video_src_w = 0, video_src_h = 0;
 
-// ========== 待做 / 数字网格 / 神秘页面 相关变量 ==========
+// ========== 寰呭仛 / 鏁板瓧缃戞牸 / 绁炵�橀〉闈� 鐩稿叧鍙橀噺 ==========
 int numGridSelectedIndex = 0;
 int passwordSequence[6];
 int passwordIndex = 0;
 
-// ========== 神秘页面列表 ==========
+// ========== 绁炵�橀〉闈㈠垪琛� ==========
 int mysterySelectedIndex = 0;
 const int mysteryTotalItems = 6;
-const char* mysteryGameNames[] = { "飞机游戏", "扫雷", "打砖�?, "贪吃�?, "2048", "小恐�? };
+const char* mysteryGameNames[] = { "Plane", "Minesweeper", "Breakout", "Snake", "2048", "Dino" };
 
-// ========== 英语学习相关变量 ==========
+// ========== 鑻辫��瀛︿範鐩稿叧鍙橀噺 ==========
 #define MAX_WORDS 500
 struct WordEntry {
   String word;
@@ -190,12 +197,12 @@ struct WordEntry {
 };
 WordEntry englishWords[MAX_WORDS];
 int englishWordCount = 0;
-int englishLearnMode = 0;   // 0=英文模式, 1=中文模式
+int englishLearnMode = 0;   // 0=鑻辨枃妯″紡, 1=涓�鏂囨ā寮�
 int englishWordIndex = 0;
-int englishPhase = 0;       // 0=主面, 1=翻转�?
+int englishPhase = 0;       // 0=涓婚潰, 1=缈昏浆闈?
 
 // ============================================================
-//  游戏相关定义（飞机打陨石�?
+//  娓告垙鐩稿叧瀹氫箟锛堥�炴満鎵撻櫒鐭筹�?
 // ============================================================
 #define MAX_METEORS 10
 #define MAX_BULLETS 20
@@ -224,10 +231,10 @@ bool gameSwPressed = false;
 unsigned long gameSwPressTime = 0;
 
 // ============================================================
-//  新增游戏全局变量
+//  鏂板�炴父鎴忓叏灞�鍙橀噺
 // ============================================================
 
-// ---------- 扫雷 ----------
+// ---------- 鎵�闆� ----------
 #define MS_ROWS 16
 #define MS_COLS 16
 struct MSCell {
@@ -241,7 +248,7 @@ bool msGameOver;
 bool msWin;
 int msRevealedCount;
 int msTotalSafe;
-int msCellSize;         // 计算得出
+int msCellSize;         // 璁＄畻寰楀嚭
 int msOffsetX, msOffsetY;
 
 // ---------- 2048 ----------
@@ -253,9 +260,9 @@ bool gameOver2048;
 bool gameWin2048;
 bool moved2048;
 unsigned long last2048InputTime;
-const int GAME2048_DELAY = 150; // 修复：原�?2048_DELAY（非法标识符�?
+const int GAME2048_DELAY = 150; // 淇�澶嶏細鍘熶�?2048_DELAY锛堥潪娉曟爣璇嗙�︼�?
 
-// ---------- 打砖�?----------
+// ---------- 鎵撶爾鍧?----------
 #define BRICK_ROWS 6
 #define BRICK_COLS 8
 struct Brick {
@@ -272,12 +279,12 @@ bool breakoutWin;
 int brickW, brickH, brickGap;
 int paddleW, paddleH;
 
-// ---------- 贪吃�?----------
+// ---------- 璐�鍚冭�?----------
 #define SNAKE_MAX_LEN 200
 struct Point { int x, y; };
 Point snake[SNAKE_MAX_LEN];
 int snakeLen;
-int snakeDir; // 0�?1�?2�?3�?
+int snakeDir; // 0涓?1鍙?2涓?3宸?
 int snakeNextDir;
 bool snakeFood;
 int foodX, foodY;
@@ -287,7 +294,7 @@ bool snakeGameOver;
 unsigned long snakeMoveTimer;
 int snakeMoveInterval = 200;
 
-// ---------- 小恐�?----------
+// ---------- 灏忔亹榫?----------
 #define MAX_OBSTACLES 10
 struct Obstacle {
     int x, y, w, h;
@@ -306,7 +313,7 @@ int dinoSpawnInterval = 1200;
 int groundY;
 
 // ============================================================
-//  函数声明（原�?+ 新增�?
+//  鍑芥暟澹版槑锛堝師鏈?+ 鏂板�烇�?
 // ============================================================
 void scanSD(const char* path);
 void drawFileList();
@@ -337,7 +344,7 @@ bool ensureCameraPreviewBuffer(uint16_t w, uint16_t h);
 void releaseCameraPreviewBuffer();
 bool camera_preview_output(int16_t x, int16_t y, uint16_t w, uint16_t h, uint16_t* bitmap);
 
-// 飞机游戏
+// 椋炴満娓告垙
 void initGame();
 void spawnMeteor();
 void shootBullet();
@@ -346,7 +353,7 @@ void renderGame();
 void handleGameInput();
 void handleGame();
 
-// 新增游戏声明
+// 鏂板�炴父鎴忓０鏄�
 void initMinesweeper();
 void handleMinesweeper();
 void updateMinesweeper();
@@ -363,6 +370,8 @@ void updateBreakout();
 void renderBreakout();
 
 void initSnake();
+void spawnFood();
+bool isOnSnake(int x, int y);
 void handleSnake();
 void updateSnake();
 void renderSnake();
@@ -372,36 +381,36 @@ void handleDino();
 void updateDino();
 void renderDino();
 
-// ---------- 获取下一个照片编�?----------
+// ---------- 鑾峰彇涓嬩竴涓�鐓х墖缂栧�?----------
 int getNextPhotoIndex() {
     int i = 0;
     while (SD.exists(String("/photo_") + i + ".jpg")) i++;
     return i;
 }
 
-// ---------- 保存照片到SD�?----------
+// ---------- 淇濆瓨鐓х墖鍒癝D鍗?----------
 void savePhotoToSD(uint8_t* data, uint32_t length) {
     if (!SD.cardType()) {
-        Serial.println("SD卡未初始化，无法保存照片");
+        Serial.println("SD鍗℃湭鍒濆�嬪寲锛屾棤娉曚繚瀛樼収鐗�");
         return;
     }
     char name[32];
     sprintf(name, "/photo_%d.jpg", photoIndex++);
     File f = SD.open(name, FILE_WRITE);
     if (!f) {
-        Serial.println("创建文件失败");
+        Serial.println("鍒涘缓鏂囦欢澶辫触");
         return;
     }
     size_t w = f.write(data, length);
     f.close();
     if (w == length) {
-        Serial.printf("照片已保�? %s (%u 字节)\n", name, length);
+        Serial.printf("鐓х墖宸蹭繚瀛? %s (%u 瀛楄妭)\n", name, length);
     } else {
-        Serial.println("写入失败");
+        Serial.println("鍐欏叆澶辫触");
     }
 }
 
-// ---------- 摄像头回�?----------
+// ---------- 鎽勫儚澶村洖璋?----------
 bool tft_output(int16_t x, int16_t y, uint16_t w, uint16_t h, uint16_t* bitmap) {
     if (!img_rgb565) return true;
     for (uint16_t row = 0; row < h; row++) {
@@ -453,7 +462,7 @@ bool camera_preview_output(int16_t x, int16_t y, uint16_t w, uint16_t h, uint16_
     return true;
 }
 
-// ---------- 图像缩放显示 ----------
+// ---------- 鍥惧儚缂╂斁鏄剧ず ----------
 void draw_scaled_image(uint16_t* src, int src_w, int src_h, int dst_x, int dst_y, int dst_w, int dst_h) {
     if (dst_w <= 0 || dst_h <= 0) return;
     tft.startWrite();
@@ -478,7 +487,7 @@ void draw_scaled_image(uint16_t* src, int src_w, int src_h, int dst_x, int dst_y
     tft.endWrite();
 }
 
-// ---------- 串口数据解析 ----------
+// ---------- 涓插彛鏁版嵁瑙ｆ瀽 ----------
 void process(uint8_t b) {
     switch (state) {
         case WAIT_SOF:
@@ -508,7 +517,7 @@ void process(uint8_t b) {
     }
 }
 
-// ---------- 摄像头主处理 ----------
+// ---------- 鎽勫儚澶翠富澶勭悊 ----------
 void handleCamera() {
     while (SerialCam.available()) {
         process(SerialCam.read());
@@ -521,7 +530,7 @@ void handleCamera() {
         if (captureRequest) {
             captureRequest = false;
             savePhotoToSD(buf, len);
-            Serial.printf("拍照: 帧大�?%u 字节\n", len);
+            Serial.printf("鎷嶇収: 甯уぇ灏?%u 瀛楄妭\n", len);
         }
 
         if (TJpgDec.getJpgSize(&jpg_width, &jpg_height, buf, len) == JDR_OK) {
@@ -550,14 +559,14 @@ void handleCamera() {
         unsigned long now = millis();
         if (now - lastFpsPrint >= 1000) {
             uint32_t fps = frameCount - lastFrameCount;
-            Serial.printf("摄像头帧�? %u fps\n", fps);
+            Serial.printf("鎽勫儚澶村抚鐜? %u fps\n", fps);
             lastFrameCount = frameCount;
             lastFpsPrint = now;
         }
     }
 }
 
-// ========== 首页绘制 ==========
+// ========== 棣栭〉缁樺埗 ==========
 void drawHome() {
     sprite.fillScreen(TFT_BLACK);
     for (int i = 0; i < 8; i++)
@@ -569,7 +578,7 @@ void drawHome() {
     sprite.fillCircle(160, 150, 4, TFT_GOLD);
 }
 
-// ========== 菜单绘制 ==========
+// ========== 鑿滃崟缁樺埗 ==========
 void drawMenu() {
     sprite.fillScreen(TFT_BLACK);
     const uint16_t BOX_COLOR_LIGHT_BLUE = sprite.color565(135, 206, 235);
@@ -601,7 +610,7 @@ void drawMenu() {
     }
 }
 
-// ========== 摇杆方向读取 ==========
+// ========== 鎽囨潌鏂瑰悜璇诲彇 ==========
 void readJoystick() {
     if (millis() - lastMoveTime < moveDelay) return;
     int vrx = analogRead(PIN_VRX);
@@ -622,7 +631,7 @@ void readJoystick() {
     }
 }
 
-// ========== 按钮按下检�?==========
+// ========== 鎸夐挳鎸変笅妫�娴?==========
 bool isSWPressed() {
     int reading = digitalRead(PIN_SW);
     if (reading == LOW && lastSWState == HIGH) {
@@ -636,7 +645,7 @@ bool isSWPressed() {
     return false;
 }
 
-// ========== 相机模式按钮处理 ==========
+// ========== 鐩告満妯″紡鎸夐挳澶勭悊 ==========
 void handleCameraButtons() {
     static unsigned long pressStart = 0;
     static bool wasPressed = false;
@@ -658,38 +667,39 @@ void handleCameraButtons() {
             captureRequest = false;
             releaseCameraPreviewBuffer();
             wasPressed = false;
-            Serial.println("长按退出相�?);
+            Serial.println("Long press: exit camera");
         }
     }
     else if (!curPressed && wasPressed) {
         if (now - pressStart < 5000) {
             captureRequest = true;
-            Serial.println("拍照请求");
+            Serial.println("鎷嶇収璇锋眰");
         }
         wasPressed = false;
     }
 }
 
-// ========== 扫描SD卡目�?==========
+// ========== 鎵�鎻廠D鍗＄洰褰?==========
+// 扫描SD卡目录（网站模式不显示“..”返回上级）
 void scanSD(const char* path) {
     fileCount = 0;
     fileSelectedIndex = 0;
     listScrollOffset = 0;
 
     if (!SD.cardType()) {
-        Serial.println("SD卡未初始�?);
+        Serial.println("SD not initialized");
         return;
     }
 
     File dir = SD.open(path);
     if (!dir || !dir.isDirectory()) {
-        Serial.printf("无法打开目录: %s\n", path);
+        Serial.printf("鏃犳硶鎵撳紑鐩�褰�: %s\n", path);
         if (dir) dir.close();
         return;
     }
 
     String pathStr = String(path);
-    if (pathStr != "/") {
+    if (pathStr != "/" && !storageWebMode) {
         fileList[fileCount] = "..";
         isDir[fileCount] = true;
         fileCount++;
@@ -742,10 +752,10 @@ void scanSD(const char* path) {
             }
         }
     }
-    Serial.printf("扫描 %s : %d 个条目\n", path, fileCount);
+    Serial.printf("鎵�鎻� %s : %d 涓�鏉＄洰\n", path, fileCount);
 }
 
-// 帧解析器状�?
+// 甯цВ鏋愬櫒鐘舵�?
 static uint8_t parser_state = 0;
 static size_t parser_bytesInFrame = 0;
 static bool parser_foundFF = false;
@@ -781,7 +791,7 @@ bool playOneFrame(File &file, uint8_t *frameBuf, size_t &frameLen, bool &stopFla
             frameBuf[parser_bytesInFrame++] = b;
 
             if (parser_bytesInFrame >= 200 * 1024) {
-                Serial.println("帧过大（>200KB），放弃并重置解析器");
+                Serial.println("甯ц繃澶э紙>200KB锛夛紝鏀惧純骞堕噸缃�瑙ｆ瀽鍣�");
                 parser_state = 0;
                 parser_bytesInFrame = 0;
                 parser_prevWasFF = false;
@@ -831,16 +841,16 @@ bool video_tft_output(int16_t x, int16_t y, uint16_t w, uint16_t h, uint16_t* bi
 void playMJPEGFromFileBrowser(const char* filename) {
     File videoFile = SD.open(filename, FILE_READ);
     if (!videoFile) {
-        Serial.printf("无法打开视频文件: %s\n", filename);
+        Serial.printf("鏃犳硶鎵撳紑瑙嗛�戞枃浠�: %s\n", filename);
         return;
     }
 
-    Serial.printf("开始播�? %s\n", filename);
+    Serial.printf("寮�濮嬫挱鏀? %s\n", filename);
     tft.fillScreen(TFT_BLACK);
     tft.setTextColor(TFT_WHITE, TFT_BLACK);
     tft.setFont(&fonts::efontCN_16);
     tft.setCursor(5, 5);
-    tft.print("播放: ");
+    tft.print("鎾�鏀�: ");
     tft.println(filename);
     delay(1500);
     tft.fillRect(0, 0, tft.width(), 25, TFT_BLACK);
@@ -848,7 +858,7 @@ void playMJPEGFromFileBrowser(const char* filename) {
     size_t maxFrameSize = 64 * 1024;
     uint8_t* jpegFrame = (uint8_t*)malloc(maxFrameSize);
     if (!jpegFrame) {
-        Serial.println("无法分配JPEG帧缓冲区");
+        Serial.println("鏃犳硶鍒嗛厤JPEG甯х紦鍐插尯");
         videoFile.close();
         return;
     }
@@ -856,7 +866,7 @@ void playMJPEGFromFileBrowser(const char* filename) {
     int screen_w = tft.width();
     video_row_buffer = (uint16_t*)malloc(screen_w * sizeof(uint16_t));
     if (!video_row_buffer) {
-        Serial.println("无法分配行缓冲区");
+        Serial.println("鏃犳硶鍒嗛厤琛岀紦鍐插尯");
         free(jpegFrame);
         videoFile.close();
         return;
@@ -884,11 +894,11 @@ void playMJPEGFromFileBrowser(const char* filename) {
             maxFrameSize = frameLen + 4096;
             jpegFrame = (uint8_t*)malloc(maxFrameSize);
             if (!jpegFrame) break;
-            Serial.printf("JPEG缓冲区扩容至 %u 字节\n", maxFrameSize);
+            Serial.printf("JPEG缂撳啿鍖烘墿瀹硅嚦 %u 瀛楄妭\n", maxFrameSize);
         }
 
         if (TJpgDec.getJpgSize(&jpgW, &jpgH, jpegFrame, frameLen) != JDR_OK) {
-            Serial.println("帧解析失败，跳过");
+            Serial.println("甯цВ鏋愬け璐ワ紝璺宠繃");
             continue;
         }
 
@@ -907,7 +917,7 @@ void playMJPEGFromFileBrowser(const char* filename) {
         video_row_y = -1;
 
         if (TJpgDec.drawJpg(0, 0, jpegFrame, frameLen) != JDR_OK) {
-            Serial.println("帧解码失�?);
+            Serial.println("JPEG decode failed");
             continue;
         }
 
@@ -918,7 +928,7 @@ void playMJPEGFromFileBrowser(const char* filename) {
         frameCount_local++;
         unsigned long now = millis();
         if (now - lastPrintTime >= 1000) {
-            Serial.printf("视频帧率: %d fps\n", frameCount_local);
+            Serial.printf("瑙嗛�戝抚鐜�: %d fps\n", frameCount_local);
             frameCount_local = 0;
             lastPrintTime = now;
         }
@@ -942,10 +952,11 @@ void playMJPEGFromFileBrowser(const char* filename) {
 
     tft.fillScreen(TFT_BLACK);
     delay(200);
-    Serial.println("视频播放结束");
+    Serial.println("瑙嗛�戞挱鏀剧粨鏉�");
 }
 
-// ========== 绘制文件列表 + 底部按钮 ==========
+// ========== 缁樺埗鏂囦欢鍒楄〃 + 搴曢儴鎸夐挳 ==========
+// 绘制文件列表（网站模式使用“山火”头部）
 void drawFileList() {
     sprite.fillScreen(TFT_BLACK);
 
@@ -972,8 +983,9 @@ void drawFileList() {
         sprite.fillRect(0, 0, tft.width(), 26, NAV);
         sprite.setFont(&fonts::efontCN_16);
         sprite.setTextColor(TFT_WHITE, NAV);
-        sprite.setCursor(6, 5);
-        sprite.print("chxnb.com");
+        sprite.setTextDatum(middle_center);
+        sprite.drawString(u8"\u5c71\u706b", tft.width() / 2, 13);
+        sprite.setTextDatum(top_left);
 
         sprite.fillRoundRect(4, 30, tft.width() - 8, 24, 6, TFT_WHITE);
         sprite.drawRoundRect(4, 30, tft.width() - 8, 24, 6, sprite.color565(210, 214, 220));
@@ -991,7 +1003,7 @@ void drawFileList() {
         if (fileCount == 0) {
             sprite.setTextDatum(middle_center);
             sprite.setTextColor(sprite.color565(90, 100, 120), BG);
-            sprite.drawString("No content", tft.width()/2, tft.height()/2);
+            sprite.drawString(u8"\u6682\u65e0\u5185\u5bb9", tft.width()/2, tft.height()/2);
         } else {
             for (int i = 0; i < maxVisible; i++) {
                 int idx = listScrollOffset + i;
@@ -1016,9 +1028,9 @@ void drawFileList() {
 
         sprite.setTextColor(SUB, BG);
         sprite.setCursor(6, tft.height() - 18);
-        sprite.print("Web mode");
+        sprite.print(u8"\u7f51\u9875\u6a21\u5f0f");
 
-        const char* btnLabels[2] = {"Home", "Exit"};
+        const char* btnLabels[2] = {u8"\u4e3b\u9875", u8"\u9000\u51fa"};
         for (int i = 0; i < 2; i++) {
             int bx = (i == 0) ? leftBtnX : rightBtnX;
             bool btnSelected = (listFocusArea == LIST_BOTTOM_BAR && listBottomBtnIndex == i);
@@ -1045,7 +1057,7 @@ void drawFileList() {
         sprite.setFont(&fonts::efontCN_16);
         sprite.setTextDatum(middle_center);
         sprite.setTextColor(TFT_WHITE);
-        sprite.drawString("无文�?, tft.width()/2, tft.height()/2);
+        sprite.drawString(u8"\u65e0\u6587\u4ef6", tft.width()/2, tft.height()/2);
     } else {
         for (int i = 0; i < maxVisible; i++) {
             int idx = listScrollOffset + i;
@@ -1060,7 +1072,7 @@ void drawFileList() {
             }
 
             sprite.setFont(&fonts::efontCN_16);
-            String prefix = isDir[idx] ? "[目录] " : "";
+            String prefix = isDir[idx] ? u8"[\u76ee\u5f55] " : "";
             uint16_t textColor = isDir[idx] ?
                                  (selected ? TFT_BLACK : sprite.color565(100,200,255)) :
                                  (selected ? TFT_BLACK : TFT_LIGHTGREY);
@@ -1074,7 +1086,7 @@ void drawFileList() {
         }
     }
 
-    const char* btnLabels[2] = {"删除", "退�?};
+    const char* btnLabels[2] = {u8"\u5220\u9664", u8"\u9000\u51fa"};
     for (int i = 0; i < 2; i++) {
         int bx = (i == 0) ? leftBtnX : rightBtnX;
         bool btnSelected = (listFocusArea == LIST_BOTTOM_BAR && listBottomBtnIndex == i);
@@ -1092,11 +1104,11 @@ void drawFileList() {
     }
 }
 
-// ---------- 显示图片 ----------
+// ---------- 鏄剧ず鍥剧墖 ----------
 void displaySelectedFile(const char* filepath, bool leaveBottomSpace) {
     File imgFile = SD.open(filepath, FILE_READ);
     if (!imgFile) {
-        Serial.printf("打开失败: %s\n", filepath);
+        Serial.printf("鎵撳紑澶辫触: %s\n", filepath);
         return;
     }
     size_t fileSize = imgFile.size();
@@ -1138,7 +1150,7 @@ void displaySelectedFile(const char* filepath, bool leaveBottomSpace) {
     free(jpgBuf);
 }
 
-// ---------- 绘制图片底部按钮 ----------
+// ---------- 缁樺埗鍥剧墖搴曢儴鎸夐挳 ----------
 void drawImageBottomBar() {
     const int btnH = 28;
     const int btnY = tft.height() - btnH - 2;
@@ -1149,7 +1161,14 @@ void drawImageBottomBar() {
 
     tft.fillRect(0, btnY - 2, tft.width(), btnH + 4, TFT_BLACK);
 
-    const char* labels[2] = {"CN", "EN"};
+    const char* labels[2];
+    if (storageWebMode) {
+        labels[0] = "Home";
+        labels[1] = "Back";
+    } else {
+        labels[0] = "Delete";
+        labels[1] = "Exit";
+    }
     tft.setFont(&fonts::efontCN_16);
     for (int i = 0; i < 2; i++) {
         int bx = (i == 0) ? leftBtnX : rightBtnX;
@@ -1168,11 +1187,11 @@ void drawImageBottomBar() {
     }
 }
 
-// ---------- 删除确认弹框 ----------
+// ---------- 鍒犻櫎纭�璁ゅ脊妗� ----------
 bool loadTextFileForView(const char* filepath) {
     File txtFile = SD.open(filepath, FILE_READ);
     if (!txtFile) {
-        Serial.printf("打开文本失败: %s\n", filepath);
+        Serial.printf("鎵撳紑鏂囨湰澶辫触: %s\n", filepath);
         return false;
     }
 
@@ -1199,12 +1218,13 @@ bool loadTextFileForView(const char* filepath) {
         textViewLines.push_back("(empty)");
     }
     if ((int)textViewLines.size() >= MAX_TEXT_VIEW_LINES || loadedBytes >= MAX_TEXT_VIEW_BYTES) {
-        textViewLines.push_back("...内容较多，极速模式仅显示前半部分...");
+        textViewLines.push_back("...鍐呭�硅緝澶氾紝鏋侀�熸ā寮忎粎鏄剧ず鍓嶅崐閮ㄥ垎...");
     }
-    Serial.printf("文本已加�? %s, %d 行\n", filepath, (int)textViewLines.size());
+    Serial.printf("鏂囨湰宸插姞杞? %s, %d 琛孿n", filepath, (int)textViewLines.size());
     return true;
 }
 
+// 文本阅读器：网站模式显示“山火”顶栏
 void drawTextViewer() {
     if (storageWebMode) {
         const uint16_t BG = sprite.color565(246, 248, 252);
@@ -1214,8 +1234,9 @@ void drawTextViewer() {
 
         sprite.fillRect(0, 0, tft.width(), 26, NAV);
         sprite.setTextColor(TFT_WHITE, NAV);
-        sprite.setCursor(6, 5);
-        sprite.print("chxnb.com");
+        sprite.setTextDatum(middle_center);
+        sprite.drawString(u8"\u5c71\u706b", tft.width() / 2, 13);
+        sprite.setTextDatum(top_left);
 
         sprite.fillRoundRect(4, 30, tft.width() - 8, 24, 6, TFT_WHITE);
         sprite.drawRoundRect(4, 30, tft.width() - 8, 24, 6, sprite.color565(210, 214, 220));
@@ -1241,7 +1262,7 @@ void drawTextViewer() {
 
         sprite.setTextColor(sprite.color565(100, 116, 139), BG);
         sprite.setCursor(6, tft.height() - 16);
-        sprite.print(String(textViewTopLine + 1) + "/" + String(textViewLines.size()) + "  SW Back");
+        sprite.print(String(textViewTopLine + 1) + "/" + String(textViewLines.size()) + "  " + String(u8"SW返回"));
         return;
     }
 
@@ -1269,7 +1290,7 @@ void drawTextViewer() {
 
     sprite.setTextColor(TFT_DARKGREY, TFT_BLACK);
     sprite.setCursor(4, tft.height() - 18);
-    sprite.print(String(textViewTopLine + 1) + "/" + String(textViewLines.size()) + "  SW返回");
+    sprite.print(String(textViewTopLine + 1) + "/" + String(textViewLines.size()) + "  " + String(u8"SW返回"));
 }
 
 void drawDeleteConfirm() {
@@ -1281,7 +1302,7 @@ void drawDeleteConfirm() {
 
     sprite.setTextDatum(middle_center);
     sprite.setTextColor(TFT_YELLOW, sprite.color565(30, 30, 30));
-    sprite.drawString("确认删除�?, tft.width() / 2, 95);
+    sprite.drawString("Delete this file?", tft.width() / 2, 95);
     sprite.setTextColor(TFT_WHITE, sprite.color565(30, 30, 30));
     sprite.drawString(fileList[fileSelectedIndex], tft.width() / 2, 120);
 
@@ -1289,7 +1310,7 @@ void drawDeleteConfirm() {
     const int leftBtnX = tft.width()/2 - btnW - 10;
     const int rightBtnX = tft.width()/2 + 10;
 
-    const char* options[2] = {"确认", "取消"};
+    const char* options[2] = {u8"\u786e\u8ba4", u8"\u53d6\u6d88"};
     for (int i = 0; i < 2; i++) {
         int bx = (i == 0) ? leftBtnX : rightBtnX;
         bool sel = (deleteConfirmSelection == i);
@@ -1302,20 +1323,20 @@ void drawDeleteConfirm() {
     }
 }
 
-// ---------- 删除文件 ----------
+// ---------- 鍒犻櫎鏂囦欢 ----------
 void deleteFile(const char* filepath) {
     if (SD.exists(filepath)) {
         if (SD.remove(filepath)) {
-            Serial.printf("已删�? %s\n", filepath);
+            Serial.printf("宸插垹闄? %s\n", filepath);
         } else {
-            Serial.printf("删除失败: %s\n", filepath);
+            Serial.printf("鍒犻櫎澶辫触: %s\n", filepath);
         }
     } else {
-        Serial.printf("不存�? %s\n", filepath);
+        Serial.printf("涓嶅瓨鍦? %s\n", filepath);
     }
 }
 
-// ========== 存储模式事件处理 ==========
+// ========== 瀛樺偍妯″紡浜嬩欢澶勭悊 ==========
 void handleStorage() {
     static unsigned long lastJoyTime = 0;
     const unsigned long joyDelay = 200;
@@ -1470,7 +1491,7 @@ void handleStorage() {
                             int lastSlash = currentPath.lastIndexOf('/');
                             if (lastSlash == 0) currentPath = "/";
                             else currentPath = currentPath.substring(0, lastSlash);
-                            Serial.println("目录过深");
+                            Serial.println("鐩�褰曡繃娣�");
                         }
                         scanSD(currentPath.c_str());
                         fileSelectedIndex = 0;
@@ -1500,13 +1521,13 @@ void handleStorage() {
                             tft.setFont(&fonts::efontCN_16);
                             tft.setTextColor(TFT_WHITE, TFT_BLACK);
                             tft.setTextDatum(middle_center);
-                            tft.drawString("加载�?..", tft.width()/2, tft.height()/2);
+                            tft.drawString("鍔犺浇涓?..", tft.width()/2, tft.height()/2);
                             if (loadTextFileForView(fullPath.c_str())) {
                                 viewingText = true;
                                 screenDirty = true;
                             }
                         } else {
-                            Serial.println("不支持的文件类型");
+                            Serial.println("涓嶆敮鎸佺殑鏂囦欢绫诲瀷");
                         }
                     }
                 } else {
@@ -1529,7 +1550,7 @@ void handleStorage() {
                         showDeleteConfirm = false;
                         currentState = MENU;
                         screenDirty = true;
-                        Serial.println("退出存�?);
+                        Serial.println("Exit storage");
                     }
                 }
             }
@@ -1618,7 +1639,7 @@ void handleStorage() {
     }
 }
 
-// ========== 初始�?==========
+// ========== 鍒濆�嬪�?==========
 void setup() {
     Serial.begin(115200);
     pinMode(PIN_SW, INPUT_PULLUP);
@@ -1641,24 +1662,24 @@ void setup() {
 
     sdSPI.begin(SD_SCK, SD_MISO, SD_MOSI, SD_CS);
     if (!SD.begin(SD_CS, sdSPI)) {
-        Serial.println("TF卡初始化失败，拍照功能不可用");
+        Serial.println("TF鍗″垵濮嬪寲澶辫触锛屾媿鐓у姛鑳戒笉鍙�鐢�");
     } else {
-        Serial.println("TF卡初始化成功");
+        Serial.println("TF鍗″垵濮嬪寲鎴愬姛");
         photoIndex = getNextPhotoIndex();
-        Serial.printf("下一个照片编�? %d\n", photoIndex);
+        Serial.printf("涓嬩竴涓�鐓х墖缂栧�? %d\n", photoIndex);
     }
 
     drawHome();
     sprite.pushSprite(0, 0);
 }
 
-// ========== 待做页面 ==========
+// ========== 寰呭仛椤甸潰 ==========
 void drawTodoPage() {
     sprite.fillScreen(TFT_BLACK);
     sprite.setTextDatum(middle_center);
     sprite.setTextColor(TFT_WHITE);
     sprite.setFont(&fonts::efontCN_16);
-    sprite.drawString("什么也没有", tft.width() / 2, tft.height() / 2);
+    sprite.drawString("浠�涔堜篃娌℃湁", tft.width() / 2, tft.height() / 2);
 }
 
 void handleTodoPage() {
@@ -1685,7 +1706,7 @@ void handleTodoPage() {
     }
 }
 
-// ========== 3×3 数字网格 ==========
+// ========== 3脳3 鏁板瓧缃戞牸 ==========
 void drawNumGrid() {
     sprite.fillScreen(TFT_BLACK);
 
@@ -1802,7 +1823,7 @@ void handleNumGrid() {
     }
 }
 
-// ========== 神秘页面（游戏列表） ==========
+// ========== 绁炵�橀〉闈�锛堟父鎴忓垪琛�锛� ==========
 void drawMysteryPage() {
     sprite.fillScreen(TFT_BLACK);
     sprite.setFont(&fonts::efontCN_16);
@@ -1878,7 +1899,7 @@ void handleMysteryPage() {
 }
 
 // ============================================================
-//  飞机打陨石游戏实�?
+//  椋炴満鎵撻櫒鐭虫父鎴忓疄鐜?
 // ============================================================
 void initGame() {
     playerX = tft.width() / 2;
@@ -2008,7 +2029,7 @@ void renderGame() {
         sprite.drawString("GAME OVER", tft.width()/2, tft.height()/2 - 30);
         sprite.setFont(&fonts::efontCN_16);
         sprite.setTextColor(TFT_WHITE, TFT_BLACK);
-        sprite.drawString("�?SW 重新开�?, tft.width()/2, tft.height()/2 + 20);
+        sprite.drawString("Press SW to restart", tft.width()/2, tft.height()/2 + 20);
     }
 
     sprite.pushSprite(0, 0);
@@ -2067,7 +2088,7 @@ void handleGame() {
 }
 
 // ============================================================
-//  扫雷游戏实现
+//  鎵�闆锋父鎴忓疄鐜�
 // ============================================================
 void initMinesweeper() {
     int screenW = tft.width();
@@ -2229,18 +2250,18 @@ void renderMinesweeper() {
     sprite.setTextColor(TFT_WHITE, TFT_BLACK);
     sprite.setCursor(5, 5);
     if (msWin) {
-        sprite.printf("你赢了！");
+        sprite.printf("浣犺耽浜嗭紒");
     } else if (msGameOver) {
-        sprite.printf("游戏结束");
+        sprite.printf("娓告垙缁撴潫");
     } else {
-        sprite.printf("�? %d", 40);
+        sprite.printf("闆? %d", 40);
     }
 
     sprite.pushSprite(0, 0);
 }
 
 // ============================================================
-//  2048 游戏实现
+//  2048 娓告垙瀹炵幇
 // ============================================================
 void init2048() {
     for (int r = 0; r < GRID_SIZE; r++)
@@ -2399,7 +2420,7 @@ void render2048() {
 }
 
 // ============================================================
-//  打砖块实�?
+//  鎵撶爾鍧楀疄鐜?
 // ============================================================
 void initBreakout() {
     brickScore = 0;
@@ -2531,7 +2552,7 @@ void renderBreakout() {
 }
 
 // ============================================================
-//  贪吃蛇实�?
+//  璐�鍚冭泧瀹炵�?
 // ============================================================
 void initSnake() {
     snakeCellSize = 16;
@@ -2669,7 +2690,7 @@ void renderSnake() {
 }
 
 // ============================================================
-//  小恐龙实�?
+//  灏忔亹榫欏疄鐜?
 // ============================================================
 void initDino() {
     dinoW = 20;
@@ -2818,7 +2839,7 @@ void renderDino() {
     sprite.pushSprite(0, 0);
 }
 
-// ========== 英语功能实现 ==========
+// ========== 鑻辫��鍔熻兘瀹炵幇 ==========
 static bool isChineseChar(uint8_t c) {
     return (c >= 0xE4 && c <= 0xE9);
 }
@@ -2826,23 +2847,23 @@ static bool isChineseChar(uint8_t c) {
 bool loadEnglishWords() {
     englishWordCount = 0;
     if (!SD.cardType()) {
-        Serial.println("SD卡未初始化，无法读取单词");
+        Serial.println("SD鍗℃湭鍒濆�嬪寲锛屾棤娉曡�诲彇鍗曡瘝");
         return false;
     }
 
     const char* filepath = "/english/book.txt";
     if (!SD.exists(filepath)) {
-        Serial.printf("文件不存�? %s\n", filepath);
+        Serial.printf("鏂囦欢涓嶅瓨鍦? %s\n", filepath);
         return false;
     }
 
     File file = SD.open(filepath, FILE_READ);
     if (!file) {
-        Serial.printf("打开文件失败: %s\n", filepath);
+        Serial.printf("鎵撳紑鏂囦欢澶辫触: %s\n", filepath);
         return false;
     }
 
-    Serial.println("开始逐行解析单词...");
+    Serial.println("寮�濮嬮�愯�岃В鏋愬崟璇�...");
     while (file.available() && englishWordCount < MAX_WORDS) {
         String line = file.readStringUntil('\n');
         line.trim();
@@ -2882,12 +2903,12 @@ bool loadEnglishWords() {
         englishWordCount++;
 
         if (englishWordCount % 100 == 0) {
-            Serial.printf("已解�?%d 个单�?..\n", englishWordCount);
+            Serial.printf("宸茶В鏋?%d 涓�鍗曡�?..\n", englishWordCount);
         }
     }
 
     file.close();
-    Serial.printf("解析完成，共 %d 个单词\n", englishWordCount);
+    Serial.printf("瑙ｆ瀽瀹屾垚锛屽叡 %d 涓�鍗曡瘝\n", englishWordCount);
     return englishWordCount > 0;
 }
 
@@ -2930,7 +2951,7 @@ void drawEnglishChoose() {
     const int startX = (tft.width() - totalW) / 2;
     const int startY = (tft.height() - btnH) / 2;
 
-    const char* labels[2] = {"CN", "EN"};
+    const char* labels[2] = {"中文", "英文"};
 
     for (int i = 0; i < 2; i++) {
         int x = startX + i * (btnW + gap);
@@ -3011,9 +3032,9 @@ void drawEnglishLearn() {
                       tft.width() / 2, progressY);
 }
 
-// ========== 主循�?==========
+// ========== 涓诲惊鐜?==========
 void loop() {
-    // 英语选择界面
+    // 鑻辫��閫夋嫨鐣岄潰
     if (currentState == ENGLISH_CHOOSE) {
         static unsigned long lastJoyTime = 0;
         if (millis() - lastJoyTime > moveDelay) {
@@ -3050,7 +3071,7 @@ void loop() {
         return;
     }
 
-    // 英语学习界面
+    // 鑻辫��瀛︿範鐣岄潰
     if (currentState == ENGLISH_LEARN) {
         static unsigned long lastJoyTime = 0;
         if (millis() - lastJoyTime > moveDelay) {
@@ -3099,7 +3120,7 @@ void loop() {
         return;
     }
 
-    // 游戏状态处�?
+    // 娓告垙鐘舵�佸�勭�?
     if (currentState == GAME_FLY) {
         handleGame();
         return;
@@ -3141,7 +3162,7 @@ void loop() {
         return;
     }
 
-    // --- 原有其他状态处�?---
+    // --- 鍘熸湁鍏朵粬鐘舵�佸�勭�?---
     if (currentState == TODO_PAGE) {
         handleTodoPage();
         if (screenDirty) {
@@ -3224,7 +3245,7 @@ void loop() {
                     tft.setTextColor(TFT_RED);
                     tft.setFont(&fonts::efontCN_16);
                     tft.setTextDatum(middle_center);
-                    tft.drawString("单词加载失败", tft.width()/2, tft.height()/2);
+                    tft.drawString("鍗曡瘝鍔犺浇澶辫触", tft.width()/2, tft.height()/2);
                     delay(1500);
                     currentState = MENU;
                     screenDirty = true;
@@ -3281,6 +3302,15 @@ void loop() {
 
     delay(10);
 }
+
+
+
+
+
+
+
+
+
 
 
 
