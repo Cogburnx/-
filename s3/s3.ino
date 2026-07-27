@@ -1,41 +1,42 @@
-#include <LovyanGFX.hpp>
+﻿#include <LovyanGFX.hpp>
 #include <TJpg_Decoder.h>
 #include <HardwareSerial.h>
 #include <esp_heap_caps.h>
 #include <SPI.h>
 #include <SD.h>
 #include <ctype.h>
+#include <time.h>
 #include <vector>
-#include <queue>       // 鐢ㄤ簬鎵�闆� flood fill
+#include <queue>       // 閻劋绨幍锟介梿锟?flood fill
 
-// ========== 灞忓箷寮曡剼 ==========
+// ========== 鐏炲繐绠峰鏇″壖 ==========
 #define PIN_SCK  12
 #define PIN_SDA  11
 #define PIN_CS   10
 #define PIN_DC   9
 #define PIN_RST  8
 
-// ========== 鎽囨潌寮曡剼 ==========
+// ========== 閹藉洦娼屽鏇″壖 ==========
 #define PIN_VRX  4
 #define PIN_VRY  5
 #define PIN_SW   6
 
-// ========== 鎽勫儚澶翠覆鍙ｅ紩鑴?==========
+// ========== 閹藉嫬鍎氭径缈犺閸欙絽绱╅懘?==========
 #define CAM_RX   17
 #define CAM_TX   16
 
-// ========== TF鍗″紩鑴?(SPI3) ==========
+// ========== TF閸椻€崇穿閼?(SPI3) ==========
 #define SD_SCK   18
 #define SD_MISO  19
 #define SD_MOSI  14
 #define SD_CS    13
 SPIClass sdSPI(HSPI);
 
-// ========== 瑙嗛�戞挱鏀惧弬鏁� ==========
+// ========== 鐟欏棝锟芥垶鎸遍弨鎯у棘閺侊拷 ==========
 #define VIDEO_FPS 12
 #define VIDEO_FRAME_DELAY_MS (1000 / VIDEO_FPS)
 
-// ---------- 灞忓箷椹卞姩 ----------
+// ---------- 鐏炲繐绠锋す鍗炲З ----------
 class LGFX : public lgfx::LGFX_Device {
     lgfx::Panel_ST7789 panel;
     lgfx::Bus_SPI bus;
@@ -68,7 +69,7 @@ LGFX tft;
 LGFX_Sprite sprite(&tft);
 HardwareSerial SerialCam(1);
 
-// ========== UI 鐘舵�?==========
+// ========== UI 閻樿埖锟?==========
 enum UIState { HOME, MENU, CAMERA, STORAGE,
                TODO_PAGE,
                NUM_GRID,
@@ -96,7 +97,7 @@ const unsigned long btnDelay = 300;
 int lastSWState = HIGH;
 bool screenDirty = true;
 
-// ========== 鏂囦欢娴忚�堢浉鍏冲彉閲� ==========
+// ========== 閺傚洣娆㈠ù蹇氾拷鍫㈡祲閸忓啿褰夐柌锟?==========
 #define MAX_FILES 50
 #define MAX_DEPTH 5
 String currentPath = "/";
@@ -107,12 +108,21 @@ int fileSelectedIndex = 0;
 int listScrollOffset = 0;
 bool viewingImage = false;
 bool viewingText = false;
+bool viewingDayChart = false;
 std::vector<String> textViewLines;
 String textViewTitle = "";
 int textViewTopLine = 0;
 const int MAX_TEXT_VIEW_LINES = 260;
 const size_t MAX_TEXT_VIEW_BYTES = 24 * 1024;
 bool storageWebMode = false;
+
+const int DAY_CHART_MAX_BUCKETS = 16;
+String dayChartTitle = "";
+String dayChartNames[DAY_CHART_MAX_BUCKETS];
+unsigned long dayChartSecs[DAY_CHART_MAX_BUCKETS];
+int dayChartCount = 0;
+unsigned long dayChartTotalSec = 0;
+int dayChartLegendOffset = 0;
 
 enum ListFocus { LIST_FILES, LIST_BOTTOM_BAR };
 ListFocus listFocusArea = LIST_FILES;
@@ -125,7 +135,7 @@ int imageBottomBtnIndex = 0;
 bool showDeleteConfirm = false;
 int deleteConfirmSelection = 0;
 
-// ========== 鑿滃崟甯冨眬 ==========
+// ========== 閼挎粌宕熺敮鍐ㄧ湰 ==========
 const int boxW = 90;
 const int boxH = 70;
 const int boxGapX = 12;
@@ -144,7 +154,7 @@ const char* menuTexts[] = {
     u8"\u5f85\u505a"
 };
 
-// ========== 鎽勫儚澶寸浉鍏冲彉閲?==========
+// ========== 閹藉嫬鍎氭径瀵告祲閸忓啿褰夐柌?==========
 #define MAX_SIZE 30000
 uint8_t buf[MAX_SIZE];
 enum { WAIT_SOF, WAIT_LEN, WAIT_DATA, WAIT_EOF } state = WAIT_SOF;
@@ -162,33 +172,46 @@ static uint16_t camera_preview_height = 0;
 #define SWAP_BYTES true
 #define FULLSCREEN_CROP false
 
-// ========== 鎷嶇収鍔熻兘 ==========
+// ========== 閹峰秶鍙庨崝鐔诲厴 ==========
 int photoIndex = 0;
 bool captureRequest = false;
 
-// ========== 甯х巼缁熻�� ==========
+// ========== 鐢呭芳缂佺喕锟斤拷 ==========
 unsigned long lastFpsPrint = 0;
 uint32_t frameCount = 0;
 uint32_t lastFrameCount = 0;
 
-// ---------- 瑙嗛�戞挱鏀惧叏灞�鍙橀噺 ----------
+// ---------- 鐟欏棝锟芥垶鎸遍弨鎯у弿鐏烇拷閸欐﹢鍣?----------
 static uint16_t* video_row_buffer = nullptr;
 static int video_row_cursor = 0;
 static int video_row_y = -1;
 static int video_dst_w = 0, video_dst_h = 0, video_dst_x = 0, video_dst_y = 0;
 static int video_src_w = 0, video_src_h = 0;
 
-// ========== 寰呭仛 / 鏁板瓧缃戞牸 / 绁炵�橀〉闈� 鐩稿叧鍙橀噺 ==========
+// ========== 瀵板懎浠?/ 閺佹澘鐡х純鎴炵壐 / 缁佺偟锟芥﹢銆夐棃锟?閻╃鍙ч崣姗€鍣?==========
 int numGridSelectedIndex = 0;
 int passwordSequence[6];
 int passwordIndex = 0;
 
-// ========== 绁炵�橀〉闈㈠垪琛� ==========
+// ========== 寰呭仛锛堢暘鑼勯挓锛?=========
+#define TODO_MAX_TASKS 32
+String todoTaskFiles[TODO_MAX_TASKS];
+int todoTaskCount = 0;
+int todoTaskSelected = 0;
+bool todoTimerRunning = false;
+String todoActiveTask = "";
+unsigned long todoStartMillis = 0;
+bool todoNeedReload = true;
+int todoCurrentDay = -1;
+bool todoSessionChosen = false;
+int todoEntrySelected = 0; // 0=寮€濮嬫柊鐨勪竴澶? 1=缁х画浠婂ぉ
+
+// ========== 缁佺偟锟芥﹢銆夐棃銏犲灙鐞涳拷 ==========
 int mysterySelectedIndex = 0;
 const int mysteryTotalItems = 6;
 const char* mysteryGameNames[] = { "Plane", "Minesweeper", "Breakout", "Snake", "2048", "Dino" };
 
-// ========== 鑻辫��瀛︿範鐩稿叧鍙橀噺 ==========
+// ========== 閼昏精锟斤拷鐎涳缚绡勯惄绋垮彠閸欐﹢鍣?==========
 #define MAX_WORDS 500
 struct WordEntry {
   String word;
@@ -197,12 +220,12 @@ struct WordEntry {
 };
 WordEntry englishWords[MAX_WORDS];
 int englishWordCount = 0;
-int englishLearnMode = 0;   // 0=鑻辨枃妯″紡, 1=涓�鏂囨ā寮�
+int englishLearnMode = 0;   // 0=閼昏鲸鏋冨Ο鈥崇础, 1=娑擄拷閺傚洦膩瀵拷
 int englishWordIndex = 0;
-int englishPhase = 0;       // 0=涓婚潰, 1=缈昏浆闈?
+int englishPhase = 0;       // 0=娑撳娼? 1=缂堟槒娴嗛棃?
 
 // ============================================================
-//  娓告垙鐩稿叧瀹氫箟锛堥�炴満鎵撻櫒鐭筹�?
+//  濞撳憡鍨欓惄绋垮彠鐎规矮绠熼敍鍫ワ拷鐐存簚閹垫捇娅掗惌绛癸拷?
 // ============================================================
 #define MAX_METEORS 10
 #define MAX_BULLETS 20
@@ -231,10 +254,10 @@ bool gameSwPressed = false;
 unsigned long gameSwPressTime = 0;
 
 // ============================================================
-//  鏂板�炴父鎴忓叏灞�鍙橀噺
+//  閺傛澘锟界偞鐖堕幋蹇撳弿鐏烇拷閸欐﹢鍣?
 // ============================================================
 
-// ---------- 鎵�闆� ----------
+// ---------- 閹碉拷闂嗭拷 ----------
 #define MS_ROWS 16
 #define MS_COLS 16
 struct MSCell {
@@ -248,7 +271,7 @@ bool msGameOver;
 bool msWin;
 int msRevealedCount;
 int msTotalSafe;
-int msCellSize;         // 璁＄畻寰楀嚭
+int msCellSize;         // 鐠侊紕鐣诲妤€鍤?
 int msOffsetX, msOffsetY;
 
 // ---------- 2048 ----------
@@ -260,9 +283,9 @@ bool gameOver2048;
 bool gameWin2048;
 bool moved2048;
 unsigned long last2048InputTime;
-const int GAME2048_DELAY = 150; // 淇�澶嶏細鍘熶�?2048_DELAY锛堥潪娉曟爣璇嗙�︼�?
+const int GAME2048_DELAY = 150; // 娣囷拷婢跺稄绱伴崢鐔讹拷?2048_DELAY閿涘牓娼▔鏇熺垼鐠囧棛锟斤讣锟?
 
-// ---------- 鎵撶爾鍧?----------
+// ---------- 閹垫挾鐖鹃崸?----------
 #define BRICK_ROWS 6
 #define BRICK_COLS 8
 struct Brick {
@@ -279,12 +302,12 @@ bool breakoutWin;
 int brickW, brickH, brickGap;
 int paddleW, paddleH;
 
-// ---------- 璐�鍚冭�?----------
+// ---------- 鐠愶拷閸氬啳锟?----------
 #define SNAKE_MAX_LEN 200
 struct Point { int x, y; };
 Point snake[SNAKE_MAX_LEN];
 int snakeLen;
-int snakeDir; // 0涓?1鍙?2涓?3宸?
+int snakeDir; // 0娑?1閸?2娑?3瀹?
 int snakeNextDir;
 bool snakeFood;
 int foodX, foodY;
@@ -294,7 +317,7 @@ bool snakeGameOver;
 unsigned long snakeMoveTimer;
 int snakeMoveInterval = 200;
 
-// ---------- 灏忔亹榫?----------
+// ---------- 鐏忓繑浜规Λ?----------
 #define MAX_OBSTACLES 10
 struct Obstacle {
     int x, y, w, h;
@@ -313,7 +336,7 @@ int dinoSpawnInterval = 1200;
 int groundY;
 
 // ============================================================
-//  鍑芥暟澹版槑锛堝師鏈?+ 鏂板�烇�?
+//  閸戣姤鏆熸竟鐗堟閿涘牆甯張?+ 閺傛澘锟界儑锟?
 // ============================================================
 void scanSD(const char* path);
 void drawFileList();
@@ -327,9 +350,491 @@ bool playOneFrame(File &file, uint8_t *frameBuf, size_t &frameLen, bool &stopFla
 void resetParser();
 bool loadTextFileForView(const char* filepath);
 void drawTextViewer();
+bool isDoDayRecordFile(const String &path, const String &name);
+bool loadDayChartForView(const char* filepath);
+void drawDayChartViewer();
 
-void drawTodoPage();
-void handleTodoPage();
+// ========== 寰呭仛璁℃椂涓庢椂闂存牸寮?==========
+// ========== ??????????????? ==========
+String todoDayFilePath(int dayId) {
+    return String("/do/day_") + String(dayId) + String(".txt");
+}
+
+String todoBaseName(const String &pathLike) {
+    int slash = pathLike.lastIndexOf('/');
+    if (slash >= 0 && slash + 1 < (int)pathLike.length()) return pathLike.substring(slash + 1);
+    return pathLike;
+}
+
+bool todoReadCurrentDay(int &dayId) {
+    dayId = -1;
+    if (!SD.exists("/do/_meta.txt")) return false;
+    File f = SD.open("/do/_meta.txt", FILE_READ);
+    if (!f) return false;
+    int latest = -1;
+    while (f.available()) {
+        String line = f.readStringUntil('\n');
+        line.trim();
+        if (!line.length()) continue;
+        int eq = line.indexOf('=');
+        if (eq < 0) continue;
+        String key = line.substring(0, eq);
+        String val = line.substring(eq + 1);
+        key.trim();
+        val.trim();
+        if (key == "current_day") {
+            int v = val.toInt();
+            if (v >= 0) latest = v;
+        }
+    }
+    f.close();
+    dayId = latest;
+    return dayId >= 0;
+}
+
+bool todoWriteCurrentDay(int dayId) {
+    if (!SD.exists("/do")) SD.mkdir("/do");
+    if (SD.exists("/do/_meta.txt")) SD.remove("/do/_meta.txt");
+    File f = SD.open("/do/_meta.txt", FILE_WRITE);
+    if (!f) return false;
+    f.print("current_day=");
+    f.println(dayId);
+    f.close();
+    return true;
+}
+
+bool todoStartNewDay() {
+    int d = -1;
+    if (!todoReadCurrentDay(d)) d = -1;
+    d += 1;
+    if (!todoWriteCurrentDay(d)) return false;
+    String p = todoDayFilePath(d);
+    if (!SD.exists(p.c_str())) {
+        File f = SD.open(p.c_str(), FILE_WRITE);
+        if (f) f.close();
+    }
+    todoCurrentDay = d;
+    todoSessionChosen = true;
+    return true;
+}
+
+bool todoContinueToday() {
+    int d = -1;
+    if (!todoReadCurrentDay(d)) {
+        d = 0;
+        if (!todoWriteCurrentDay(d)) return false;
+    }
+    String p = todoDayFilePath(d);
+    if (!SD.exists(p.c_str())) {
+        File f = SD.open(p.c_str(), FILE_WRITE);
+        if (f) f.close();
+    }
+    todoCurrentDay = d;
+    todoSessionChosen = true;
+    return true;
+}
+
+String todoFormatDuration(unsigned long sec) {
+    unsigned long h = sec / 3600;
+    unsigned long m = (sec % 3600) / 60;
+    unsigned long s2 = sec % 60;
+    char b[16];
+    snprintf(b, sizeof(b), "%02lu:%02lu:%02lu", h, m, s2);
+    return String(b);
+}
+
+String todoFormatDurationSmart(unsigned long sec) {
+    unsigned long h = sec / 3600;
+    unsigned long m = (sec % 3600) / 60;
+    unsigned long s = sec % 60;
+    char b[20];
+    if (h > 0) {
+        snprintf(b, sizeof(b), "%luh %lum %lus", h, m, s);
+    } else if (m > 0) {
+        snprintf(b, sizeof(b), "%lum %lus", m, s);
+    } else {
+        snprintf(b, sizeof(b), "%lus", s);
+    }
+    return String(b);
+}
+
+bool todoLoadTaskFiles() {
+    todoTaskCount = 0;
+    if (!SD.cardType()) return false;
+    if (!SD.exists("/do")) return false;
+
+    File dir = SD.open("/do");
+    if (!dir || !dir.isDirectory()) {
+        if (dir) dir.close();
+        return false;
+    }
+
+    File entry = dir.openNextFile();
+    while (entry && todoTaskCount < TODO_MAX_TASKS) {
+        String name = todoBaseName(String(entry.name()));
+        String nameLower = name;
+        nameLower.toLowerCase();
+        bool isTask = !entry.isDirectory() && nameLower.endsWith(".txt");
+        bool isMeta = (name == "_meta.txt");
+        bool isDay = nameLower.startsWith("day_");
+        if (isTask && !isMeta && !isDay) {
+            todoTaskFiles[todoTaskCount++] = name;
+        }
+        entry.close();
+        entry = dir.openNextFile();
+    }
+    dir.close();
+
+    for (int i = 0; i < todoTaskCount - 1; i++) {
+        for (int j = i + 1; j < todoTaskCount; j++) {
+            if (todoTaskFiles[i] > todoTaskFiles[j]) {
+                String t = todoTaskFiles[i];
+                todoTaskFiles[i] = todoTaskFiles[j];
+                todoTaskFiles[j] = t;
+            }
+        }
+    }
+    if (todoTaskSelected >= todoTaskCount) todoTaskSelected = (todoTaskCount > 0) ? (todoTaskCount - 1) : 0;
+    return true;
+}
+
+bool todoStartTimer() {
+    if (todoTaskCount <= 0) return false;
+    if (todoTaskSelected < 0 || todoTaskSelected >= todoTaskCount) return false;
+    todoActiveTask = todoBaseName(todoTaskFiles[todoTaskSelected]);
+    todoStartMillis = millis();
+    todoTimerRunning = true;
+    return true;
+}
+
+bool todoStopTimerAndSave() {
+    if (!todoTimerRunning) return false;
+    if (todoCurrentDay < 0) return false;
+
+    unsigned long durationSec = (unsigned long)((millis() - todoStartMillis) / 1000);
+    String path = todoDayFilePath(todoCurrentDay);
+
+    File f = SD.open(path.c_str(), FILE_APPEND);
+    if (!f) return false;
+    f.print(todoActiveTask);
+    f.print(',');
+    f.println(durationSec);
+    f.close();
+
+    todoTimerRunning = false;
+    todoActiveTask = "";
+    todoStartMillis = 0;
+    return true;
+}
+
+unsigned long todoTodayTotalSec() {
+    if (todoCurrentDay < 0) return 0;
+    String path = todoDayFilePath(todoCurrentDay);
+    if (!SD.exists(path.c_str())) return 0;
+    File f = SD.open(path.c_str(), FILE_READ);
+    if (!f) return 0;
+    unsigned long total = 0;
+    while (f.available()) {
+        String line = f.readStringUntil('\n');
+        line.trim();
+        if (!line.length()) continue;
+        int c = line.lastIndexOf(',');
+        if (c >= 0) {
+            String sec = line.substring(c + 1);
+            sec.trim();
+            total += (unsigned long)sec.toInt();
+        }
+    }
+    f.close();
+    return total;
+}
+
+String todoTaskDisplayName(String taskName) {
+    String n = todoBaseName(taskName);
+    String lower = n;
+    lower.toLowerCase();
+    if (lower.endsWith(".txt") && n.length() > 4) {
+        n = n.substring(0, n.length() - 4);
+    }
+    return n;
+}
+
+int todoLoadTodayBuckets(String names[], unsigned long secs[], int maxBuckets, unsigned long &totalSec) {
+    totalSec = 0;
+    if (maxBuckets <= 0 || todoCurrentDay < 0) return 0;
+    String path = todoDayFilePath(todoCurrentDay);
+    if (!SD.exists(path.c_str())) return 0;
+    File f = SD.open(path.c_str(), FILE_READ);
+    if (!f) return 0;
+
+    int count = 0;
+    while (f.available()) {
+        String line = f.readStringUntil('\n');
+        line.trim();
+        if (!line.length()) continue;
+
+        int c = line.lastIndexOf(',');
+        if (c < 0) continue;
+
+        String rawTask = line.substring(0, c);
+        String secStr = line.substring(c + 1);
+        rawTask.trim();
+        secStr.trim();
+        unsigned long sec = (unsigned long)secStr.toInt();
+        if (sec == 0) continue;
+
+        String task = todoTaskDisplayName(rawTask);
+        if (!task.length()) task = u8"\u672a\u547d\u540d";
+
+        int hit = -1;
+        for (int i = 0; i < count; i++) {
+            if (names[i] == task) {
+                hit = i;
+                break;
+            }
+        }
+
+        if (hit >= 0) {
+            secs[hit] += sec;
+        } else if (count < maxBuckets) {
+            names[count] = task;
+            secs[count] = sec;
+            count++;
+        } else {
+            names[maxBuckets - 1] = u8"\u5176\u4ed6";
+            secs[maxBuckets - 1] += sec;
+        }
+        totalSec += sec;
+    }
+    f.close();
+
+    for (int i = 0; i < count - 1; i++) {
+        for (int j = i + 1; j < count; j++) {
+            if (secs[j] > secs[i]) {
+                unsigned long ts = secs[i];
+                secs[i] = secs[j];
+                secs[j] = ts;
+                String tn = names[i];
+                names[i] = names[j];
+                names[j] = tn;
+            }
+        }
+    }
+    return count;
+}
+void todoDrawSector(int cx, int cy, int r, float degStart, float degEnd, uint16_t color) {
+    if (degEnd <= degStart) return;
+    float a = degStart;
+    const float step = 3.0f;
+    while (a < degEnd) {
+        float b = a + step;
+        if (b > degEnd) b = degEnd;
+        float ar = a * DEG_TO_RAD;
+        float br = b * DEG_TO_RAD;
+        int x1 = cx + (int)(cosf(ar) * r);
+        int y1 = cy + (int)(sinf(ar) * r);
+        int x2 = cx + (int)(cosf(br) * r);
+        int y2 = cy + (int)(sinf(br) * r);
+        sprite.fillTriangle(cx, cy, x1, y1, x2, y2, color);
+        a = b;
+    }
+}
+
+void drawTodoPieChart(int cx, int cy, int r) {
+    const int MAX_BUCKETS = 8;
+    String names[MAX_BUCKETS];
+    unsigned long secs[MAX_BUCKETS];
+    for (int i = 0; i < MAX_BUCKETS; i++) secs[i] = 0;
+
+    unsigned long totalSec = 0;
+    int count = todoLoadTodayBuckets(names, secs, MAX_BUCKETS, totalSec);
+
+    sprite.fillCircle(cx, cy, r, TFT_DARKGREY);
+    sprite.drawCircle(cx, cy, r, TFT_DARKGREY);
+
+    sprite.setTextDatum(top_left);
+    sprite.setTextColor(TFT_CYAN, TFT_BLACK);
+    sprite.setCursor(cx - r, cy + r + 6);
+    sprite.print(u8"\u4eca\u65e5\u5206\u5e03");
+
+    if (count <= 0 || totalSec == 0) {
+        sprite.setTextColor(TFT_LIGHTGREY, TFT_BLACK);
+        sprite.setCursor(cx - r, cy - 8);
+        sprite.print(u8"\u6682\u65e0\u6570\u636e");
+        return;
+    }
+
+    const uint16_t colors[8] = {
+        TFT_ORANGE, TFT_GREEN, TFT_CYAN, TFT_MAGENTA,
+        TFT_YELLOW, TFT_BLUE, TFT_RED, TFT_WHITE
+    };
+
+    float angle = -90.0f;
+    for (int i = 0; i < count; i++) {
+        float sweep = 360.0f * ((float)secs[i] / (float)totalSec);
+        if (sweep < 1.0f) sweep = 1.0f;
+        todoDrawSector(cx, cy, r - 1, angle, angle + sweep, colors[i % 8]);
+        angle += sweep;
+    }
+
+    int legendY = cy + r + 20;
+    int legendX = cx - r;
+    int maxLegend = count;
+    if (maxLegend > 3) maxLegend = 3;
+    for (int i = 0; i < maxLegend; i++) {
+        sprite.fillRect(legendX, legendY + i * 14 + 3, 8, 8, colors[i % 8]);
+        sprite.setTextColor(TFT_WHITE, TFT_BLACK);
+        sprite.setCursor(legendX + 12, legendY + i * 14);
+        String row = names[i] + " " + todoFormatDurationSmart(secs[i]);
+        sprite.print(row);
+    }
+}
+
+void drawTodoPage() {
+    sprite.fillScreen(TFT_BLACK);
+    sprite.setFont(&fonts::efontCN_16);
+    sprite.setTextColor(TFT_WHITE, TFT_BLACK);
+    sprite.setTextDatum(top_left);
+    sprite.setCursor(6, 5);
+    sprite.print(u8"\u5f85\u505a / \u4e13\u6ce8");
+
+    if (!todoSessionChosen) {
+        const char* opts[2] = {u8"\u5f00\u59cb\u65b0\u7684\u4e00\u5929", u8"\u7ee7\u7eed\u4eca\u5929"};
+        for (int i = 0; i < 2; i++) {
+            int y = 70 + i * 46;
+            bool sel = (todoEntrySelected == i);
+            uint16_t bg = sel ? TFT_YELLOW : TFT_DARKGREY;
+            uint16_t tc = sel ? TFT_BLACK : TFT_WHITE;
+            sprite.fillRoundRect(26, y, tft.width() - 52, 34, 8, bg);
+            sprite.setTextDatum(middle_center);
+            sprite.setTextColor(tc, bg);
+            sprite.drawString(opts[i], tft.width() / 2, y + 17);
+        }
+        sprite.setTextColor(TFT_DARKGREY, TFT_BLACK);
+        sprite.setTextDatum(top_left);
+        sprite.setCursor(6, tft.height() - 18);
+        sprite.print(u8"\u77ed\u6309\u9009\u62e9  \u957f\u6309\u8fd4\u56de");
+        return;
+    }
+
+    if (todoTaskCount <= 0) {
+        sprite.setTextDatum(middle_center);
+        sprite.drawString(u8"\u8bf7\u5728TF\u5361 /do \u4e0b\u653e\u4efb\u52a1txt", tft.width() / 2, tft.height() / 2 - 8);
+        return;
+    }
+
+    if (!todoTimerRunning) {
+        sprite.setTextColor(TFT_DARKGREY, TFT_BLACK);
+        sprite.setCursor(6, 24);
+        sprite.print(String(u8"Day ") + String(todoCurrentDay));
+        sprite.setTextColor(TFT_CYAN, TFT_BLACK);
+        sprite.setCursor(110, 24);
+        sprite.print(String(u8"\u4eca\u65e5\u7d2f\u8ba1: ") + todoFormatDuration(todoTodayTotalSec()));
+
+        int top = 46;
+        int lineH = 22;
+        int maxVisible = 7;
+        const int listW = 150;
+        int startIdx = todoTaskSelected - 2;
+        if (startIdx < 0) startIdx = 0;
+        if (startIdx > todoTaskCount - maxVisible) startIdx = todoTaskCount - maxVisible;
+        if (startIdx < 0) startIdx = 0;
+
+        for (int i = 0; i < maxVisible; i++) {
+            int idx = startIdx + i;
+            if (idx >= todoTaskCount) break;
+            int y = top + i * lineH;
+            bool sel = (idx == todoTaskSelected);
+            if (sel) sprite.fillRoundRect(4, y - 1, listW, lineH, 5, TFT_YELLOW);
+            sprite.setTextColor(sel ? TFT_BLACK : TFT_LIGHTGREY, sel ? TFT_YELLOW : TFT_BLACK);
+            sprite.setCursor(10, y + 2);
+            sprite.print(todoTaskDisplayName(todoTaskFiles[idx]));
+        }
+
+        int pieCx = tft.width() - 78;
+        int pieCy = 116;
+        int pieR = 48;
+        drawTodoPieChart(pieCx, pieCy, pieR);
+
+        sprite.setTextColor(TFT_DARKGREY, TFT_BLACK);
+        sprite.setCursor(6, tft.height() - 18);
+        sprite.print(u8"\u77ed\u6309\u5f00\u59cb  \u957f\u6309\u8fd4\u56de");
+    } else {
+        unsigned long elapsed = (unsigned long)((millis() - todoStartMillis) / 1000);
+        sprite.setTextDatum(middle_center);
+        sprite.setTextColor(TFT_YELLOW, TFT_BLACK);
+        sprite.drawString(u8"\u6b63\u5728\u4e13\u6ce8", tft.width() / 2, 72);
+        sprite.setTextColor(TFT_WHITE, TFT_BLACK);
+        sprite.drawString(todoActiveTask, tft.width() / 2, 104);
+        sprite.setTextColor(TFT_GREEN, TFT_BLACK);
+        sprite.drawString(todoFormatDuration(elapsed), tft.width() / 2, 140);
+        sprite.setTextColor(TFT_CYAN, TFT_BLACK);
+        sprite.drawString(String(u8"Day ") + String(todoCurrentDay), tft.width() / 2, 166);
+        sprite.setTextColor(TFT_DARKGREY, TFT_BLACK);
+        sprite.drawString(u8"\u77ed\u6309\u7ed3\u675f\u5e76\u8bb0\u5f55\u65f6\u957f  \u957f\u6309\u8fd4\u56de", tft.width() / 2, 196);
+    }
+}
+
+void handleTodoPage() {
+    if (todoNeedReload) {
+        todoLoadTaskFiles();
+        todoNeedReload = false;
+        todoSessionChosen = false;
+        todoEntrySelected = 0;
+        todoCurrentDay = -1;
+        screenDirty = true;
+    }
+
+    static unsigned long lastJoyTime = 0;
+    const unsigned long joyDelay = 180;
+    if (millis() - lastJoyTime > joyDelay) {
+        int vry = analogRead(PIN_VRY);
+        bool moved = false;
+        if (!todoSessionChosen) {
+            if (vry < 2048 - joyThreshold) { if (todoEntrySelected > 0) { todoEntrySelected--; moved = true; } }
+            else if (vry > 2048 + joyThreshold) { if (todoEntrySelected < 1) { todoEntrySelected++; moved = true; } }
+        } else if (!todoTimerRunning && todoTaskCount > 0) {
+            if (vry < 2048 - joyThreshold) { if (todoTaskSelected > 0) { todoTaskSelected--; moved = true; } }
+            else if (vry > 2048 + joyThreshold) { if (todoTaskSelected < todoTaskCount - 1) { todoTaskSelected++; moved = true; } }
+        }
+        if (moved) {
+            lastJoyTime = millis();
+            screenDirty = true;
+        }
+    }
+
+    static unsigned long pressStart = 0;
+    static bool wasPressed = false;
+    bool curPressed = (digitalRead(PIN_SW) == LOW);
+    unsigned long now = millis();
+
+    if (curPressed && !wasPressed) {
+        pressStart = now;
+        wasPressed = true;
+    } else if (!curPressed && wasPressed) {
+        unsigned long held = now - pressStart;
+        if (held >= 1200) {
+            if (todoTimerRunning) todoStopTimerAndSave();
+            currentState = MENU;
+            screenDirty = true;
+        } else {
+            if (!todoSessionChosen) {
+                if (todoEntrySelected == 0) todoStartNewDay();
+                else todoContinueToday();
+                screenDirty = true;
+            } else if (!todoTimerRunning) {
+                if (todoStartTimer()) screenDirty = true;
+            } else {
+                todoStopTimerAndSave();
+                screenDirty = true;
+            }
+        }
+        wasPressed = false;
+    }
+
+    if (todoTimerRunning) screenDirty = true;
+}
+
 void drawNumGrid();
 void handleNumGrid();
 void drawMysteryPage();
@@ -344,7 +849,7 @@ bool ensureCameraPreviewBuffer(uint16_t w, uint16_t h);
 void releaseCameraPreviewBuffer();
 bool camera_preview_output(int16_t x, int16_t y, uint16_t w, uint16_t h, uint16_t* bitmap);
 
-// 椋炴満娓告垙
+// 妞嬬偞婧€濞撳憡鍨?
 void initGame();
 void spawnMeteor();
 void shootBullet();
@@ -353,7 +858,7 @@ void renderGame();
 void handleGameInput();
 void handleGame();
 
-// 鏂板�炴父鎴忓０鏄�
+// 閺傛澘锟界偞鐖堕幋蹇擄紣閺勶拷
 void initMinesweeper();
 void handleMinesweeper();
 void updateMinesweeper();
@@ -381,36 +886,36 @@ void handleDino();
 void updateDino();
 void renderDino();
 
-// ---------- 鑾峰彇涓嬩竴涓�鐓х墖缂栧�?----------
+// ---------- 閼惧嘲褰囨稉瀣╃娑擄拷閻撗呭缂傛牕锟?----------
 int getNextPhotoIndex() {
     int i = 0;
     while (SD.exists(String("/photo_") + i + ".jpg")) i++;
     return i;
 }
 
-// ---------- 淇濆瓨鐓х墖鍒癝D鍗?----------
+// ---------- 娣囨繂鐡ㄩ悡褏澧栭崚鐧滵閸?----------
 void savePhotoToSD(uint8_t* data, uint32_t length) {
     if (!SD.cardType()) {
-        Serial.println("SD鍗℃湭鍒濆�嬪寲锛屾棤娉曚繚瀛樼収鐗�");
+        Serial.println(u8"SD卡未初始化，无法保存照片");
         return;
     }
     char name[32];
     sprintf(name, "/photo_%d.jpg", photoIndex++);
     File f = SD.open(name, FILE_WRITE);
     if (!f) {
-        Serial.println("鍒涘缓鏂囦欢澶辫触");
+        Serial.println(u8"创建照片文件失败");
         return;
     }
     size_t w = f.write(data, length);
     f.close();
     if (w == length) {
-        Serial.printf("鐓х墖宸蹭繚瀛? %s (%u 瀛楄妭)\n", name, length);
+        Serial.printf("閻撗呭瀹歌弓绻氱€? %s (%u 鐎涙濡?\n", name, length);
     } else {
-        Serial.println("鍐欏叆澶辫触");
+        Serial.println("閸愭瑥鍙嗘径杈Е");
     }
 }
 
-// ---------- 鎽勫儚澶村洖璋?----------
+// ---------- 閹藉嫬鍎氭径鏉戞礀鐠?----------
 bool tft_output(int16_t x, int16_t y, uint16_t w, uint16_t h, uint16_t* bitmap) {
     if (!img_rgb565) return true;
     for (uint16_t row = 0; row < h; row++) {
@@ -462,7 +967,7 @@ bool camera_preview_output(int16_t x, int16_t y, uint16_t w, uint16_t h, uint16_
     return true;
 }
 
-// ---------- 鍥惧儚缂╂斁鏄剧ず ----------
+// ---------- 閸ユ儳鍎氱紓鈺傛杹閺勫墽銇?----------
 void draw_scaled_image(uint16_t* src, int src_w, int src_h, int dst_x, int dst_y, int dst_w, int dst_h) {
     if (dst_w <= 0 || dst_h <= 0) return;
     tft.startWrite();
@@ -487,7 +992,7 @@ void draw_scaled_image(uint16_t* src, int src_w, int src_h, int dst_x, int dst_y
     tft.endWrite();
 }
 
-// ---------- 涓插彛鏁版嵁瑙ｆ瀽 ----------
+// ---------- 娑撴彃褰涢弫鐗堝祦鐟欙絾鐎?----------
 void process(uint8_t b) {
     switch (state) {
         case WAIT_SOF:
@@ -517,7 +1022,7 @@ void process(uint8_t b) {
     }
 }
 
-// ---------- 鎽勫儚澶翠富澶勭悊 ----------
+// ---------- 閹藉嫬鍎氭径缈犲瘜婢跺嫮鎮?----------
 void handleCamera() {
     while (SerialCam.available()) {
         process(SerialCam.read());
@@ -530,7 +1035,7 @@ void handleCamera() {
         if (captureRequest) {
             captureRequest = false;
             savePhotoToSD(buf, len);
-            Serial.printf("鎷嶇収: 甯уぇ灏?%u 瀛楄妭\n", len);
+            Serial.printf("閹峰秶鍙? 鐢冦亣鐏?%u 鐎涙濡璡n", len);
         }
 
         if (TJpgDec.getJpgSize(&jpg_width, &jpg_height, buf, len) == JDR_OK) {
@@ -559,14 +1064,14 @@ void handleCamera() {
         unsigned long now = millis();
         if (now - lastFpsPrint >= 1000) {
             uint32_t fps = frameCount - lastFrameCount;
-            Serial.printf("鎽勫儚澶村抚鐜? %u fps\n", fps);
+            Serial.printf("閹藉嫬鍎氭径鏉戞姎閻? %u fps\n", fps);
             lastFrameCount = frameCount;
             lastFpsPrint = now;
         }
     }
 }
 
-// ========== 棣栭〉缁樺埗 ==========
+// ========== 妫ｆ牠銆夌紒妯哄煑 ==========
 void drawHome() {
     sprite.fillScreen(TFT_BLACK);
     for (int i = 0; i < 8; i++)
@@ -578,7 +1083,7 @@ void drawHome() {
     sprite.fillCircle(160, 150, 4, TFT_GOLD);
 }
 
-// ========== 鑿滃崟缁樺埗 ==========
+// ========== 閼挎粌宕熺紒妯哄煑 ==========
 void drawMenu() {
     sprite.fillScreen(TFT_BLACK);
     const uint16_t BOX_COLOR_LIGHT_BLUE = sprite.color565(135, 206, 235);
@@ -610,7 +1115,7 @@ void drawMenu() {
     }
 }
 
-// ========== 鎽囨潌鏂瑰悜璇诲彇 ==========
+// ========== 閹藉洦娼岄弬鐟版倻鐠囪褰?==========
 void readJoystick() {
     if (millis() - lastMoveTime < moveDelay) return;
     int vrx = analogRead(PIN_VRX);
@@ -631,7 +1136,7 @@ void readJoystick() {
     }
 }
 
-// ========== 鎸夐挳鎸変笅妫�娴?==========
+// ========== 閹稿鎸抽幐澶夌瑓濡拷濞?==========
 bool isSWPressed() {
     int reading = digitalRead(PIN_SW);
     if (reading == LOW && lastSWState == HIGH) {
@@ -645,7 +1150,7 @@ bool isSWPressed() {
     return false;
 }
 
-// ========== 鐩告満妯″紡鎸夐挳澶勭悊 ==========
+// ========== 閻╁憡婧€濡€崇础閹稿鎸虫径鍕倞 ==========
 void handleCameraButtons() {
     static unsigned long pressStart = 0;
     static bool wasPressed = false;
@@ -673,14 +1178,14 @@ void handleCameraButtons() {
     else if (!curPressed && wasPressed) {
         if (now - pressStart < 5000) {
             captureRequest = true;
-            Serial.println("鎷嶇収璇锋眰");
+            Serial.println("閹峰秶鍙庣拠閿嬬湴");
         }
         wasPressed = false;
     }
 }
 
-// ========== 鎵�鎻廠D鍗＄洰褰?==========
-// 扫描SD卡目录（网站模式不显示“..”返回上级）
+// ========== 閹碉拷閹诲粻D閸楋紕娲拌ぐ?==========
+// 鎵弿SD鍗＄洰褰曪紙缃戠珯妯″紡涓嶆樉绀衡€?.鈥濊繑鍥炰笂绾э級
 void scanSD(const char* path) {
     fileCount = 0;
     fileSelectedIndex = 0;
@@ -693,7 +1198,7 @@ void scanSD(const char* path) {
 
     File dir = SD.open(path);
     if (!dir || !dir.isDirectory()) {
-        Serial.printf("鏃犳硶鎵撳紑鐩�褰�: %s\n", path);
+        Serial.printf("閺冪姵纭堕幍鎾崇磻閻╋拷瑜帮拷: %s\n", path);
         if (dir) dir.close();
         return;
     }
@@ -752,10 +1257,10 @@ void scanSD(const char* path) {
             }
         }
     }
-    Serial.printf("鎵�鎻� %s : %d 涓�鏉＄洰\n", path, fileCount);
+    Serial.printf("閹碉拷閹伙拷 %s : %d 娑擄拷閺夛紕娲癨n", path, fileCount);
 }
 
-// 甯цВ鏋愬櫒鐘舵�?
+// 鐢喰掗弸鎰珤閻樿埖锟?
 static uint8_t parser_state = 0;
 static size_t parser_bytesInFrame = 0;
 static bool parser_foundFF = false;
@@ -791,7 +1296,7 @@ bool playOneFrame(File &file, uint8_t *frameBuf, size_t &frameLen, bool &stopFla
             frameBuf[parser_bytesInFrame++] = b;
 
             if (parser_bytesInFrame >= 200 * 1024) {
-                Serial.println("甯ц繃澶э紙>200KB锛夛紝鏀惧純骞堕噸缃�瑙ｆ瀽鍣�");
+                Serial.println(u8"视频单帧超过200KB，已丢弃该帧");
                 parser_state = 0;
                 parser_bytesInFrame = 0;
                 parser_prevWasFF = false;
@@ -841,16 +1346,16 @@ bool video_tft_output(int16_t x, int16_t y, uint16_t w, uint16_t h, uint16_t* bi
 void playMJPEGFromFileBrowser(const char* filename) {
     File videoFile = SD.open(filename, FILE_READ);
     if (!videoFile) {
-        Serial.printf("鏃犳硶鎵撳紑瑙嗛�戞枃浠�: %s\n", filename);
+        Serial.printf("閺冪姵纭堕幍鎾崇磻鐟欏棝锟芥垶鏋冩禒锟? %s\n", filename);
         return;
     }
 
-    Serial.printf("寮�濮嬫挱鏀? %s\n", filename);
+    Serial.printf("瀵拷婵鎸遍弨? %s\n", filename);
     tft.fillScreen(TFT_BLACK);
     tft.setTextColor(TFT_WHITE, TFT_BLACK);
     tft.setFont(&fonts::efontCN_16);
     tft.setCursor(5, 5);
-    tft.print("鎾�鏀�: ");
+    tft.print("閹撅拷閺€锟? ");
     tft.println(filename);
     delay(1500);
     tft.fillRect(0, 0, tft.width(), 25, TFT_BLACK);
@@ -858,7 +1363,7 @@ void playMJPEGFromFileBrowser(const char* filename) {
     size_t maxFrameSize = 64 * 1024;
     uint8_t* jpegFrame = (uint8_t*)malloc(maxFrameSize);
     if (!jpegFrame) {
-        Serial.println("鏃犳硶鍒嗛厤JPEG甯х紦鍐插尯");
+        Serial.println(u8"分配JPEG帧缓冲失败");
         videoFile.close();
         return;
     }
@@ -866,7 +1371,7 @@ void playMJPEGFromFileBrowser(const char* filename) {
     int screen_w = tft.width();
     video_row_buffer = (uint16_t*)malloc(screen_w * sizeof(uint16_t));
     if (!video_row_buffer) {
-        Serial.println("鏃犳硶鍒嗛厤琛岀紦鍐插尯");
+        Serial.println("閺冪姵纭堕崚鍡涘帳鐞涘瞼绱﹂崘鎻掑隘");
         free(jpegFrame);
         videoFile.close();
         return;
@@ -894,11 +1399,11 @@ void playMJPEGFromFileBrowser(const char* filename) {
             maxFrameSize = frameLen + 4096;
             jpegFrame = (uint8_t*)malloc(maxFrameSize);
             if (!jpegFrame) break;
-            Serial.printf("JPEG缂撳啿鍖烘墿瀹硅嚦 %u 瀛楄妭\n", maxFrameSize);
+            Serial.printf("JPEG缂傛挸鍟块崠鐑樺⒖鐎圭鍤?%u 鐎涙濡璡n", maxFrameSize);
         }
 
         if (TJpgDec.getJpgSize(&jpgW, &jpgH, jpegFrame, frameLen) != JDR_OK) {
-            Serial.println("甯цВ鏋愬け璐ワ紝璺宠繃");
+            Serial.println("鐢喰掗弸鎰亼鐠愩儻绱濈捄瀹犵箖");
             continue;
         }
 
@@ -928,7 +1433,7 @@ void playMJPEGFromFileBrowser(const char* filename) {
         frameCount_local++;
         unsigned long now = millis();
         if (now - lastPrintTime >= 1000) {
-            Serial.printf("瑙嗛�戝抚鐜�: %d fps\n", frameCount_local);
+            Serial.printf("鐟欏棝锟芥垵鎶氶悳锟? %d fps\n", frameCount_local);
             frameCount_local = 0;
             lastPrintTime = now;
         }
@@ -952,11 +1457,11 @@ void playMJPEGFromFileBrowser(const char* filename) {
 
     tft.fillScreen(TFT_BLACK);
     delay(200);
-    Serial.println("瑙嗛�戞挱鏀剧粨鏉�");
+    Serial.println("鐟欏棝锟芥垶鎸遍弨鍓х波閺夛拷");
 }
 
-// ========== 缁樺埗鏂囦欢鍒楄〃 + 搴曢儴鎸夐挳 ==========
-// 绘制文件列表（网站模式使用“山火”头部）
+// ========== 缂佹ê鍩楅弬鍥︽閸掓銆?+ 鎼存洟鍎撮幐澶愭尦 ==========
+// 缁樺埗鏂囦欢鍒楄〃锛堢綉绔欐ā寮忎娇鐢ㄢ€滃北鐏€濆ご閮級
 void drawFileList() {
     sprite.fillScreen(TFT_BLACK);
 
@@ -1104,11 +1609,11 @@ void drawFileList() {
     }
 }
 
-// ---------- 鏄剧ず鍥剧墖 ----------
+// ---------- 閺勫墽銇氶崶鍓у ----------
 void displaySelectedFile(const char* filepath, bool leaveBottomSpace) {
     File imgFile = SD.open(filepath, FILE_READ);
     if (!imgFile) {
-        Serial.printf("鎵撳紑澶辫触: %s\n", filepath);
+        Serial.printf("閹垫挸绱戞径杈Е: %s\n", filepath);
         return;
     }
     size_t fileSize = imgFile.size();
@@ -1150,7 +1655,7 @@ void displaySelectedFile(const char* filepath, bool leaveBottomSpace) {
     free(jpgBuf);
 }
 
-// ---------- 缁樺埗鍥剧墖搴曢儴鎸夐挳 ----------
+// ---------- 缂佹ê鍩楅崶鍓у鎼存洟鍎撮幐澶愭尦 ----------
 void drawImageBottomBar() {
     const int btnH = 28;
     const int btnY = tft.height() - btnH - 2;
@@ -1187,11 +1692,11 @@ void drawImageBottomBar() {
     }
 }
 
-// ---------- 鍒犻櫎纭�璁ゅ脊妗� ----------
+// ---------- 閸掔娀娅庣涵锟界拋銈呰剨濡楋拷 ----------
 bool loadTextFileForView(const char* filepath) {
     File txtFile = SD.open(filepath, FILE_READ);
     if (!txtFile) {
-        Serial.printf("鎵撳紑鏂囨湰澶辫触: %s\n", filepath);
+        Serial.printf("閹垫挸绱戦弬鍥ㄦ拱婢惰精瑙? %s\n", filepath);
         return false;
     }
 
@@ -1218,13 +1723,13 @@ bool loadTextFileForView(const char* filepath) {
         textViewLines.push_back("(empty)");
     }
     if ((int)textViewLines.size() >= MAX_TEXT_VIEW_LINES || loadedBytes >= MAX_TEXT_VIEW_BYTES) {
-        textViewLines.push_back("...鍐呭�硅緝澶氾紝鏋侀�熸ā寮忎粎鏄剧ず鍓嶅崐閮ㄥ垎...");
+        textViewLines.push_back("...閸愬懎锟界绶濇径姘剧礉閺嬩線锟界喐膩瀵繋绮庨弰鍓с仛閸撳秴宕愰柈銊ュ瀻...");
     }
-    Serial.printf("鏂囨湰宸插姞杞? %s, %d 琛孿n", filepath, (int)textViewLines.size());
+    Serial.printf("閺傚洦婀板鎻掑鏉? %s, %d 鐞涘n", filepath, (int)textViewLines.size());
     return true;
 }
 
-// 文本阅读器：网站模式显示“山火”顶栏
+// 鏂囨湰闃呰鍣細缃戠珯妯″紡鏄剧ず鈥滃北鐏€濋《鏍?
 void drawTextViewer() {
     if (storageWebMode) {
         const uint16_t BG = sprite.color565(246, 248, 252);
@@ -1262,7 +1767,7 @@ void drawTextViewer() {
 
         sprite.setTextColor(sprite.color565(100, 116, 139), BG);
         sprite.setCursor(6, tft.height() - 16);
-        sprite.print(String(textViewTopLine + 1) + "/" + String(textViewLines.size()) + "  " + String(u8"SW返回"));
+        sprite.print(String(textViewTopLine + 1) + "/" + String(textViewLines.size()) + "  " + String(u8"SW杩斿洖"));
         return;
     }
 
@@ -1290,7 +1795,153 @@ void drawTextViewer() {
 
     sprite.setTextColor(TFT_DARKGREY, TFT_BLACK);
     sprite.setCursor(4, tft.height() - 18);
-    sprite.print(String(textViewTopLine + 1) + "/" + String(textViewLines.size()) + "  " + String(u8"SW返回"));
+    sprite.print(String(textViewTopLine + 1) + "/" + String(textViewLines.size()) + "  " + String(u8"SW杩斿洖"));
+}
+
+bool isDoDayRecordFile(const String &path, const String &name) {
+    String lp = path;
+    String ln = name;
+    lp.toLowerCase();
+    ln.toLowerCase();
+    if (!(lp == "/do" || lp == "/do/")) return false;
+    return ln.startsWith("day_") && ln.endsWith(".txt");
+}
+
+bool loadDayChartForView(const char* filepath) {
+    File f = SD.open(filepath, FILE_READ);
+    if (!f) return false;
+
+    for (int i = 0; i < DAY_CHART_MAX_BUCKETS; i++) {
+        dayChartNames[i] = "";
+        dayChartSecs[i] = 0;
+    }
+    dayChartCount = 0;
+    dayChartTotalSec = 0;
+    dayChartLegendOffset = 0;
+
+    String title = String(filepath);
+    int slashPos = title.lastIndexOf('/');
+    if (slashPos >= 0 && slashPos < (int)title.length() - 1) {
+        title = title.substring(slashPos + 1);
+    }
+    dayChartTitle = title;
+
+    while (f.available()) {
+        String line = f.readStringUntil('\n');
+        line.trim();
+        if (!line.length()) continue;
+
+        int c = line.lastIndexOf(',');
+        if (c < 0) continue;
+        String rawTask = line.substring(0, c);
+        String secStr = line.substring(c + 1);
+        rawTask.trim();
+        secStr.trim();
+        unsigned long sec = (unsigned long)secStr.toInt();
+        if (sec == 0) continue;
+
+        String task = todoTaskDisplayName(rawTask);
+        if (!task.length()) task = u8"\u672a\u547d\u540d";
+
+        int hit = -1;
+        for (int i = 0; i < dayChartCount; i++) {
+            if (dayChartNames[i] == task) { hit = i; break; }
+        }
+
+        if (hit >= 0) {
+            dayChartSecs[hit] += sec;
+        } else if (dayChartCount < DAY_CHART_MAX_BUCKETS) {
+            dayChartNames[dayChartCount] = task;
+            dayChartSecs[dayChartCount] = sec;
+            dayChartCount++;
+        } else {
+            int oi = DAY_CHART_MAX_BUCKETS - 1;
+            if (dayChartNames[oi].length() == 0) dayChartNames[oi] = u8"\u5176\u4ed6";
+            dayChartSecs[oi] += sec;
+        }
+        dayChartTotalSec += sec;
+    }
+    f.close();
+
+    for (int i = 0; i < dayChartCount - 1; i++) {
+        for (int j = i + 1; j < dayChartCount; j++) {
+            if (dayChartSecs[j] > dayChartSecs[i]) {
+                unsigned long ts = dayChartSecs[i];
+                dayChartSecs[i] = dayChartSecs[j];
+                dayChartSecs[j] = ts;
+                String tn = dayChartNames[i];
+                dayChartNames[i] = dayChartNames[j];
+                dayChartNames[j] = tn;
+            }
+        }
+    }
+    return true;
+}
+
+void drawDayChartViewer() {
+    sprite.fillScreen(TFT_BLACK);
+    sprite.setFont(&fonts::efontCN_16);
+    sprite.setTextDatum(top_left);
+    sprite.setTextColor(TFT_WHITE, TFT_BLACK);
+    sprite.setCursor(6, 4);
+    sprite.print(u8"\u5386\u53f2\u5206\u5e03  ");
+    sprite.print(dayChartTitle);
+
+    int cx = 80;
+    int cy = 120;
+    int r = 56;
+    sprite.fillCircle(cx, cy, r, TFT_DARKGREY);
+    sprite.drawCircle(cx, cy, r, TFT_DARKGREY);
+
+    if (dayChartTotalSec > 0 && dayChartCount > 0) {
+        const uint16_t colors[8] = {
+            TFT_ORANGE, TFT_GREEN, TFT_CYAN, TFT_MAGENTA,
+            TFT_YELLOW, TFT_BLUE, TFT_RED, TFT_WHITE
+        };
+        float angle = -90.0f;
+        for (int i = 0; i < dayChartCount; i++) {
+            float sweep = 360.0f * ((float)dayChartSecs[i] / (float)dayChartTotalSec);
+            if (sweep < 1.0f) sweep = 1.0f;
+            todoDrawSector(cx, cy, r - 1, angle, angle + sweep, colors[i % 8]);
+            angle += sweep;
+        }
+    } else {
+        sprite.setTextColor(TFT_LIGHTGREY, TFT_DARKGREY);
+        sprite.setTextDatum(middle_center);
+        sprite.drawString(u8"\u65e0\u6570\u636e", cx, cy);
+        sprite.setTextDatum(top_left);
+    }
+
+    int lx = 148;
+    int ly = 30;
+    int lh = 18;
+    int maxRows = 10;
+    if (maxRows > dayChartCount) maxRows = dayChartCount;
+    if (dayChartLegendOffset < 0) dayChartLegendOffset = 0;
+    if (dayChartLegendOffset > dayChartCount - maxRows) dayChartLegendOffset = dayChartCount - maxRows;
+    if (dayChartLegendOffset < 0) dayChartLegendOffset = 0;
+
+    const uint16_t colors2[8] = {
+        TFT_ORANGE, TFT_GREEN, TFT_CYAN, TFT_MAGENTA,
+        TFT_YELLOW, TFT_BLUE, TFT_RED, TFT_WHITE
+    };
+    for (int i = 0; i < maxRows; i++) {
+        int idx = dayChartLegendOffset + i;
+        int y = ly + i * lh;
+        sprite.fillRect(lx, y + 3, 9, 9, colors2[idx % 8]);
+        sprite.setTextColor(TFT_WHITE, TFT_BLACK);
+        sprite.setCursor(lx + 12, y);
+        String name = dayChartNames[idx];
+        if (name.length() > 7) name = name.substring(0, 7) + "...";
+        sprite.print(name + " " + todoFormatDurationSmart(dayChartSecs[idx]));
+    }
+
+    sprite.setTextColor(TFT_CYAN, TFT_BLACK);
+    sprite.setCursor(6, 186);
+    sprite.print(String(u8"\u603b\u65f6\u957f: ") + todoFormatDuration(dayChartTotalSec));
+    sprite.setTextColor(TFT_DARKGREY, TFT_BLACK);
+    sprite.setCursor(6, 206);
+    sprite.print(u8"\u6447\u6746\u4e0a\u4e0b\u6eda\u52a8  SW\u8fd4\u56de");
 }
 
 void drawDeleteConfirm() {
@@ -1323,20 +1974,20 @@ void drawDeleteConfirm() {
     }
 }
 
-// ---------- 鍒犻櫎鏂囦欢 ----------
+// ---------- 閸掔娀娅庨弬鍥︽ ----------
 void deleteFile(const char* filepath) {
     if (SD.exists(filepath)) {
         if (SD.remove(filepath)) {
-            Serial.printf("宸插垹闄? %s\n", filepath);
+            Serial.printf("瀹告彃鍨归梽? %s\n", filepath);
         } else {
-            Serial.printf("鍒犻櫎澶辫触: %s\n", filepath);
+            Serial.printf("閸掔娀娅庢径杈Е: %s\n", filepath);
         }
     } else {
-        Serial.printf("涓嶅瓨鍦? %s\n", filepath);
+        Serial.printf("娑撳秴鐡ㄩ崷? %s\n", filepath);
     }
 }
 
-// ========== 瀛樺偍妯″紡浜嬩欢澶勭悊 ==========
+// ========== 鐎涙ê鍋嶅Ο鈥崇础娴滃娆㈡径鍕倞 ==========
 void handleStorage() {
     static unsigned long lastJoyTime = 0;
     const unsigned long joyDelay = 200;
@@ -1369,6 +2020,7 @@ void handleStorage() {
                 if (fileSelectedIndex >= fileCount) fileSelectedIndex = fileCount - 1;
                 viewingImage = false;
                 viewingText = false;
+                viewingDayChart = false;
                 listFocusArea = LIST_FILES;
                 imageFocusArea = IMAGE_AREA;
             }
@@ -1414,6 +2066,42 @@ void handleStorage() {
             viewingText = false;
             screenDirty = true;
             txtWasPressed = false;
+        }
+        return;
+    }
+
+    if (viewingDayChart) {
+        if (millis() - lastJoyTime > joyDelay) {
+            bool moved = false;
+            int maxRows = 10;
+            if (maxRows > dayChartCount) maxRows = dayChartCount;
+            int maxOffset = dayChartCount - maxRows;
+            if (maxOffset < 0) maxOffset = 0;
+            if (vry < 2048 - joyThreshold) {
+                if (dayChartLegendOffset > 0) {
+                    dayChartLegendOffset--;
+                    moved = true;
+                }
+            } else if (vry > 2048 + joyThreshold) {
+                if (dayChartLegendOffset < maxOffset) {
+                    dayChartLegendOffset++;
+                    moved = true;
+                }
+            }
+            if (moved) {
+                lastJoyTime = millis();
+                screenDirty = true;
+            }
+        }
+
+        static bool chartWasPressed = false;
+        bool chartPressed = (digitalRead(PIN_SW) == LOW);
+        if (chartPressed && !chartWasPressed) {
+            chartWasPressed = true;
+        } else if (!chartPressed && chartWasPressed) {
+            viewingDayChart = false;
+            screenDirty = true;
+            chartWasPressed = false;
         }
         return;
     }
@@ -1491,7 +2179,7 @@ void handleStorage() {
                             int lastSlash = currentPath.lastIndexOf('/');
                             if (lastSlash == 0) currentPath = "/";
                             else currentPath = currentPath.substring(0, lastSlash);
-                            Serial.println("鐩�褰曡繃娣�");
+                            Serial.println(u8"目录层级超出限制");
                         }
                         scanSD(currentPath.c_str());
                         fileSelectedIndex = 0;
@@ -1521,13 +2209,20 @@ void handleStorage() {
                             tft.setFont(&fonts::efontCN_16);
                             tft.setTextColor(TFT_WHITE, TFT_BLACK);
                             tft.setTextDatum(middle_center);
-                            tft.drawString("鍔犺浇涓?..", tft.width()/2, tft.height()/2);
-                            if (loadTextFileForView(fullPath.c_str())) {
-                                viewingText = true;
-                                screenDirty = true;
+                            tft.drawString("閸旂姾娴囨稉?..", tft.width()/2, tft.height()/2);
+                            if (isDoDayRecordFile(currentPath, fileList[fileSelectedIndex])) {
+                                if (loadDayChartForView(fullPath.c_str())) {
+                                    viewingDayChart = true;
+                                    screenDirty = true;
+                                }
+                            } else {
+                                if (loadTextFileForView(fullPath.c_str())) {
+                                    viewingText = true;
+                                    screenDirty = true;
+                                }
                             }
                         } else {
-                            Serial.println("涓嶆敮鎸佺殑鏂囦欢绫诲瀷");
+                            Serial.println(u8"不支持的文件类型");
                         }
                     }
                 } else {
@@ -1547,6 +2242,7 @@ void handleStorage() {
                     } else {
                         viewingImage = false;
                         viewingText = false;
+                        viewingDayChart = false;
                         showDeleteConfirm = false;
                         currentState = MENU;
                         screenDirty = true;
@@ -1639,7 +2335,7 @@ void handleStorage() {
     }
 }
 
-// ========== 鍒濆�嬪�?==========
+// ========== 閸掓繂锟藉锟?==========
 void setup() {
     Serial.begin(115200);
     pinMode(PIN_SW, INPUT_PULLUP);
@@ -1662,51 +2358,18 @@ void setup() {
 
     sdSPI.begin(SD_SCK, SD_MISO, SD_MOSI, SD_CS);
     if (!SD.begin(SD_CS, sdSPI)) {
-        Serial.println("TF鍗″垵濮嬪寲澶辫触锛屾媿鐓у姛鑳戒笉鍙�鐢�");
+        Serial.println("TF閸椻€冲灥婵瀵叉径杈Е閿涘本濯块悡褍濮涢懗鎴掔瑝閸欙拷閻拷");
     } else {
-        Serial.println("TF鍗″垵濮嬪寲鎴愬姛");
+        Serial.println("TF閸椻€冲灥婵瀵查幋鎰");
         photoIndex = getNextPhotoIndex();
-        Serial.printf("涓嬩竴涓�鐓х墖缂栧�? %d\n", photoIndex);
+        Serial.printf("娑撳绔存稉锟介悡褏澧栫紓鏍э拷? %d\n", photoIndex);
     }
 
     drawHome();
     sprite.pushSprite(0, 0);
 }
 
-// ========== 寰呭仛椤甸潰 ==========
-void drawTodoPage() {
-    sprite.fillScreen(TFT_BLACK);
-    sprite.setTextDatum(middle_center);
-    sprite.setTextColor(TFT_WHITE);
-    sprite.setFont(&fonts::efontCN_16);
-    sprite.drawString("浠�涔堜篃娌℃湁", tft.width() / 2, tft.height() / 2);
-}
-
-void handleTodoPage() {
-    static unsigned long pressStart = 0;
-    static bool wasPressed = false;
-    bool curPressed = (digitalRead(PIN_SW) == LOW);
-    unsigned long now = millis();
-
-    if (curPressed && !wasPressed) {
-        pressStart = now;
-        wasPressed = true;
-    }
-    else if (!curPressed && wasPressed) {
-        if (now - pressStart >= 3000) {
-            numGridSelectedIndex = 0;
-            passwordIndex = 0;
-            currentState = NUM_GRID;
-            screenDirty = true;
-        } else {
-            currentState = MENU;
-            screenDirty = true;
-        }
-        wasPressed = false;
-    }
-}
-
-// ========== 3脳3 鏁板瓧缃戞牸 ==========
+// ========== 瀵板懎浠涙い鐢告桨 ==========
 void drawNumGrid() {
     sprite.fillScreen(TFT_BLACK);
 
@@ -1823,7 +2486,7 @@ void handleNumGrid() {
     }
 }
 
-// ========== 绁炵�橀〉闈�锛堟父鎴忓垪琛�锛� ==========
+// ========== 缁佺偟锟芥﹢銆夐棃锟介敍鍫熺埗閹村繐鍨悰锟介敍锟?==========
 void drawMysteryPage() {
     sprite.fillScreen(TFT_BLACK);
     sprite.setFont(&fonts::efontCN_16);
@@ -1899,7 +2562,7 @@ void handleMysteryPage() {
 }
 
 // ============================================================
-//  椋炴満鎵撻櫒鐭虫父鎴忓疄鐜?
+//  妞嬬偞婧€閹垫捇娅掗惌铏埗閹村繐鐤勯悳?
 // ============================================================
 void initGame() {
     playerX = tft.width() / 2;
@@ -2088,7 +2751,7 @@ void handleGame() {
 }
 
 // ============================================================
-//  鎵�闆锋父鎴忓疄鐜�
+//  閹碉拷闂嗛攱鐖堕幋蹇撶杽閻滐拷
 // ============================================================
 void initMinesweeper() {
     int screenW = tft.width();
@@ -2250,18 +2913,18 @@ void renderMinesweeper() {
     sprite.setTextColor(TFT_WHITE, TFT_BLACK);
     sprite.setCursor(5, 5);
     if (msWin) {
-        sprite.printf("浣犺耽浜嗭紒");
+        sprite.printf("娴ｇ姾鑰芥禍鍡磼");
     } else if (msGameOver) {
-        sprite.printf("娓告垙缁撴潫");
+        sprite.printf("濞撳憡鍨欑紒鎾存将");
     } else {
-        sprite.printf("闆? %d", 40);
+        sprite.printf("闂? %d", 40);
     }
 
     sprite.pushSprite(0, 0);
 }
 
 // ============================================================
-//  2048 娓告垙瀹炵幇
+//  2048 濞撳憡鍨欑€圭偟骞?
 // ============================================================
 void init2048() {
     for (int r = 0; r < GRID_SIZE; r++)
@@ -2420,7 +3083,7 @@ void render2048() {
 }
 
 // ============================================================
-//  鎵撶爾鍧楀疄鐜?
+//  閹垫挾鐖鹃崸妤€鐤勯悳?
 // ============================================================
 void initBreakout() {
     brickScore = 0;
@@ -2552,7 +3215,7 @@ void renderBreakout() {
 }
 
 // ============================================================
-//  璐�鍚冭泧瀹炵�?
+//  鐠愶拷閸氬啳娉х€圭偟锟?
 // ============================================================
 void initSnake() {
     snakeCellSize = 16;
@@ -2690,7 +3353,7 @@ void renderSnake() {
 }
 
 // ============================================================
-//  灏忔亹榫欏疄鐜?
+//  鐏忓繑浜规Λ娆忕杽閻?
 // ============================================================
 void initDino() {
     dinoW = 20;
@@ -2839,7 +3502,7 @@ void renderDino() {
     sprite.pushSprite(0, 0);
 }
 
-// ========== 鑻辫��鍔熻兘瀹炵幇 ==========
+// ========== 閼昏精锟斤拷閸旂喕鍏樼€圭偟骞?==========
 static bool isChineseChar(uint8_t c) {
     return (c >= 0xE4 && c <= 0xE9);
 }
@@ -2847,23 +3510,23 @@ static bool isChineseChar(uint8_t c) {
 bool loadEnglishWords() {
     englishWordCount = 0;
     if (!SD.cardType()) {
-        Serial.println("SD鍗℃湭鍒濆�嬪寲锛屾棤娉曡�诲彇鍗曡瘝");
+        Serial.println(u8"SD卡未初始化，无法读取英语词库");
         return false;
     }
 
     const char* filepath = "/english/book.txt";
     if (!SD.exists(filepath)) {
-        Serial.printf("鏂囦欢涓嶅瓨鍦? %s\n", filepath);
+        Serial.printf("閺傚洣娆㈡稉宥呯摠閸? %s\n", filepath);
         return false;
     }
 
     File file = SD.open(filepath, FILE_READ);
     if (!file) {
-        Serial.printf("鎵撳紑鏂囦欢澶辫触: %s\n", filepath);
+        Serial.printf("閹垫挸绱戦弬鍥︽婢惰精瑙? %s\n", filepath);
         return false;
     }
 
-    Serial.println("寮�濮嬮�愯�岃В鏋愬崟璇�...");
+    Serial.println("瀵拷婵锟芥劘锟藉矁袙閺嬫劕宕熺拠锟?..");
     while (file.available() && englishWordCount < MAX_WORDS) {
         String line = file.readStringUntil('\n');
         line.trim();
@@ -2903,12 +3566,12 @@ bool loadEnglishWords() {
         englishWordCount++;
 
         if (englishWordCount % 100 == 0) {
-            Serial.printf("宸茶В鏋?%d 涓�鍗曡�?..\n", englishWordCount);
+            Serial.printf("瀹歌尪袙閺?%d 娑擄拷閸楁洝锟?..\n", englishWordCount);
         }
     }
 
     file.close();
-    Serial.printf("瑙ｆ瀽瀹屾垚锛屽叡 %d 涓�鍗曡瘝\n", englishWordCount);
+    Serial.printf("鐟欙絾鐎界€瑰本鍨氶敍灞藉彙 %d 娑擄拷閸楁洝鐦漒n", englishWordCount);
     return englishWordCount > 0;
 }
 
@@ -2951,7 +3614,7 @@ void drawEnglishChoose() {
     const int startX = (tft.width() - totalW) / 2;
     const int startY = (tft.height() - btnH) / 2;
 
-    const char* labels[2] = {"中文", "英文"};
+    const char* labels[2] = {"涓枃", "鑻辨枃"};
 
     for (int i = 0; i < 2; i++) {
         int x = startX + i * (btnW + gap);
@@ -3032,9 +3695,9 @@ void drawEnglishLearn() {
                       tft.width() / 2, progressY);
 }
 
-// ========== 涓诲惊鐜?==========
+// ========== 娑撹鎯婇悳?==========
 void loop() {
-    // 鑻辫��閫夋嫨鐣岄潰
+    // 閼昏精锟斤拷闁瀚ㄩ悾宀勬桨
     if (currentState == ENGLISH_CHOOSE) {
         static unsigned long lastJoyTime = 0;
         if (millis() - lastJoyTime > moveDelay) {
@@ -3071,7 +3734,7 @@ void loop() {
         return;
     }
 
-    // 鑻辫��瀛︿範鐣岄潰
+    // 閼昏精锟斤拷鐎涳缚绡勯悾宀勬桨
     if (currentState == ENGLISH_LEARN) {
         static unsigned long lastJoyTime = 0;
         if (millis() - lastJoyTime > moveDelay) {
@@ -3120,7 +3783,7 @@ void loop() {
         return;
     }
 
-    // 娓告垙鐘舵�佸�勭�?
+    // 濞撳憡鍨欓悩鑸碉拷浣革拷鍕拷?
     if (currentState == GAME_FLY) {
         handleGame();
         return;
@@ -3162,7 +3825,7 @@ void loop() {
         return;
     }
 
-    // --- 鍘熸湁鍏朵粬鐘舵�佸�勭�?---
+    // --- 閸樼喐婀侀崗鏈电铂閻樿埖锟戒礁锟藉嫮锟?---
     if (currentState == TODO_PAGE) {
         handleTodoPage();
         if (screenDirty) {
@@ -3200,6 +3863,7 @@ void loop() {
                 listScrollOffset = 0;
                 viewingImage = false;
                 viewingText = false;
+                viewingDayChart = false;
                 textViewLines.clear();
                 listFocusArea = LIST_FILES;
                 listBottomBtnIndex = 0;
@@ -3226,6 +3890,7 @@ void loop() {
                 listScrollOffset = 0;
                 viewingImage = false;
                 viewingText = false;
+                viewingDayChart = false;
                 textViewLines.clear();
                 listFocusArea = LIST_FILES;
                 listBottomBtnIndex = 0;
@@ -3245,7 +3910,7 @@ void loop() {
                     tft.setTextColor(TFT_RED);
                     tft.setFont(&fonts::efontCN_16);
                     tft.setTextDatum(middle_center);
-                    tft.drawString("鍗曡瘝鍔犺浇澶辫触", tft.width()/2, tft.height()/2);
+                    tft.drawString(u8"\u5355\u8bcd\u52a0\u8f7d\u5931\u8d25", tft.width()/2, tft.height()/2);
                     delay(1500);
                     currentState = MENU;
                     screenDirty = true;
@@ -3253,6 +3918,7 @@ void loop() {
             }
             else if (selectedIndex == 5) {
                 currentState = TODO_PAGE;
+                todoNeedReload = true;
                 screenDirty = true;
             }
             else {
@@ -3270,6 +3936,12 @@ void loop() {
         if (showDeleteConfirm) {
             drawDeleteConfirm();
             sprite.pushSprite(0, 0);
+        } else if (viewingDayChart) {
+            if (screenDirty) {
+                drawDayChartViewer();
+                sprite.pushSprite(0, 0);
+                screenDirty = false;
+            }
         } else if (viewingText) {
             if (screenDirty) {
                 drawTextViewer();
