@@ -20,11 +20,11 @@
 #define PIN_VRY  5
 #define PIN_SW   6
 
-// ========== 摄像头串口引脚 ==========
+// ========== 摄像头串口引�?==========
 #define CAM_RX   17
 #define CAM_TX   16
 
-// ========== TF卡引脚 (SPI3) ==========
+// ========== TF卡引�?(SPI3) ==========
 #define SD_SCK   18
 #define SD_MISO  19
 #define SD_MOSI  14
@@ -68,7 +68,7 @@ LGFX tft;
 LGFX_Sprite sprite(&tft);
 HardwareSerial SerialCam(1);
 
-// ========== UI 状态 ==========
+// ========== UI 状�?==========
 enum UIState { HOME, MENU, CAMERA, STORAGE,
                TODO_PAGE,
                NUM_GRID,
@@ -106,6 +106,13 @@ int fileCount = 0;
 int fileSelectedIndex = 0;
 int listScrollOffset = 0;
 bool viewingImage = false;
+bool viewingText = false;
+std::vector<String> textViewLines;
+String textViewTitle = "";
+int textViewTopLine = 0;
+const int MAX_TEXT_VIEW_LINES = 260;
+const size_t MAX_TEXT_VIEW_BYTES = 24 * 1024;
+bool storageWebMode = false;
 
 enum ListFocus { LIST_FILES, LIST_BOTTOM_BAR };
 ListFocus listFocusArea = LIST_FILES;
@@ -130,7 +137,7 @@ const int startY = (240 - boxesTotalHeight) / 2;
 
 const char* menuTexts[] = { "搜索", "拍摄", "存储", "语文", "英语", "待做" };
 
-// ========== 摄像头相关变量 ==========
+// ========== 摄像头相关变�?==========
 #define MAX_SIZE 30000
 uint8_t buf[MAX_SIZE];
 enum { WAIT_SOF, WAIT_LEN, WAIT_DATA, WAIT_EOF } state = WAIT_SOF;
@@ -172,7 +179,7 @@ int passwordIndex = 0;
 // ========== 神秘页面列表 ==========
 int mysterySelectedIndex = 0;
 const int mysteryTotalItems = 6;
-const char* mysteryGameNames[] = { "飞机游戏", "扫雷", "打砖块", "贪吃蛇", "2048", "小恐龙" };
+const char* mysteryGameNames[] = { "飞机游戏", "扫雷", "打砖�?, "贪吃�?, "2048", "小恐�? };
 
 // ========== 英语学习相关变量 ==========
 #define MAX_WORDS 500
@@ -185,10 +192,10 @@ WordEntry englishWords[MAX_WORDS];
 int englishWordCount = 0;
 int englishLearnMode = 0;   // 0=英文模式, 1=中文模式
 int englishWordIndex = 0;
-int englishPhase = 0;       // 0=主面, 1=翻转面
+int englishPhase = 0;       // 0=主面, 1=翻转�?
 
 // ============================================================
-//  游戏相关定义（飞机打陨石）
+//  游戏相关定义（飞机打陨石�?
 // ============================================================
 #define MAX_METEORS 10
 #define MAX_BULLETS 20
@@ -246,9 +253,9 @@ bool gameOver2048;
 bool gameWin2048;
 bool moved2048;
 unsigned long last2048InputTime;
-const int GAME2048_DELAY = 150; // 修复：原为 2048_DELAY（非法标识符）
+const int GAME2048_DELAY = 150; // 修复：原�?2048_DELAY（非法标识符�?
 
-// ---------- 打砖块 ----------
+// ---------- 打砖�?----------
 #define BRICK_ROWS 6
 #define BRICK_COLS 8
 struct Brick {
@@ -265,12 +272,12 @@ bool breakoutWin;
 int brickW, brickH, brickGap;
 int paddleW, paddleH;
 
-// ---------- 贪吃蛇 ----------
+// ---------- 贪吃�?----------
 #define SNAKE_MAX_LEN 200
 struct Point { int x, y; };
 Point snake[SNAKE_MAX_LEN];
 int snakeLen;
-int snakeDir; // 0上 1右 2下 3左
+int snakeDir; // 0�?1�?2�?3�?
 int snakeNextDir;
 bool snakeFood;
 int foodX, foodY;
@@ -280,7 +287,7 @@ bool snakeGameOver;
 unsigned long snakeMoveTimer;
 int snakeMoveInterval = 200;
 
-// ---------- 小恐龙 ----------
+// ---------- 小恐�?----------
 #define MAX_OBSTACLES 10
 struct Obstacle {
     int x, y, w, h;
@@ -299,7 +306,7 @@ int dinoSpawnInterval = 1200;
 int groundY;
 
 // ============================================================
-//  函数声明（原有 + 新增）
+//  函数声明（原�?+ 新增�?
 // ============================================================
 void scanSD(const char* path);
 void drawFileList();
@@ -311,6 +318,8 @@ void deleteFile(const char* filepath);
 void playMJPEGFromFileBrowser(const char* filename);
 bool playOneFrame(File &file, uint8_t *frameBuf, size_t &frameLen, bool &stopFlag);
 void resetParser();
+bool loadTextFileForView(const char* filepath);
+void drawTextViewer();
 
 void drawTodoPage();
 void handleTodoPage();
@@ -363,14 +372,14 @@ void handleDino();
 void updateDino();
 void renderDino();
 
-// ---------- 获取下一个照片编号 ----------
+// ---------- 获取下一个照片编�?----------
 int getNextPhotoIndex() {
     int i = 0;
     while (SD.exists(String("/photo_") + i + ".jpg")) i++;
     return i;
 }
 
-// ---------- 保存照片到SD卡 ----------
+// ---------- 保存照片到SD�?----------
 void savePhotoToSD(uint8_t* data, uint32_t length) {
     if (!SD.cardType()) {
         Serial.println("SD卡未初始化，无法保存照片");
@@ -386,13 +395,13 @@ void savePhotoToSD(uint8_t* data, uint32_t length) {
     size_t w = f.write(data, length);
     f.close();
     if (w == length) {
-        Serial.printf("照片已保存: %s (%u 字节)\n", name, length);
+        Serial.printf("照片已保�? %s (%u 字节)\n", name, length);
     } else {
         Serial.println("写入失败");
     }
 }
 
-// ---------- 摄像头回调 ----------
+// ---------- 摄像头回�?----------
 bool tft_output(int16_t x, int16_t y, uint16_t w, uint16_t h, uint16_t* bitmap) {
     if (!img_rgb565) return true;
     for (uint16_t row = 0; row < h; row++) {
@@ -512,7 +521,7 @@ void handleCamera() {
         if (captureRequest) {
             captureRequest = false;
             savePhotoToSD(buf, len);
-            Serial.printf("拍照: 帧大小 %u 字节\n", len);
+            Serial.printf("拍照: 帧大�?%u 字节\n", len);
         }
 
         if (TJpgDec.getJpgSize(&jpg_width, &jpg_height, buf, len) == JDR_OK) {
@@ -541,7 +550,7 @@ void handleCamera() {
         unsigned long now = millis();
         if (now - lastFpsPrint >= 1000) {
             uint32_t fps = frameCount - lastFrameCount;
-            Serial.printf("摄像头帧率: %u fps\n", fps);
+            Serial.printf("摄像头帧�? %u fps\n", fps);
             lastFrameCount = frameCount;
             lastFpsPrint = now;
         }
@@ -613,7 +622,7 @@ void readJoystick() {
     }
 }
 
-// ========== 按钮按下检测 ==========
+// ========== 按钮按下检�?==========
 bool isSWPressed() {
     int reading = digitalRead(PIN_SW);
     if (reading == LOW && lastSWState == HIGH) {
@@ -649,7 +658,7 @@ void handleCameraButtons() {
             captureRequest = false;
             releaseCameraPreviewBuffer();
             wasPressed = false;
-            Serial.println("长按退出相机");
+            Serial.println("长按退出相�?);
         }
     }
     else if (!curPressed && wasPressed) {
@@ -661,14 +670,14 @@ void handleCameraButtons() {
     }
 }
 
-// ========== 扫描SD卡目录 ==========
+// ========== 扫描SD卡目�?==========
 void scanSD(const char* path) {
     fileCount = 0;
     fileSelectedIndex = 0;
     listScrollOffset = 0;
 
     if (!SD.cardType()) {
-        Serial.println("SD卡未初始化");
+        Serial.println("SD卡未初始�?);
         return;
     }
 
@@ -699,11 +708,22 @@ void scanSD(const char* path) {
             fileList[fileCount] = name;
             isDir[fileCount] = true;
             fileCount++;
-        } else if (name.endsWith(".jpg") || name.endsWith(".JPG") ||
-                   name.endsWith(".mjpg") || name.endsWith(".mjpeg")) {
-            fileList[fileCount] = name;
-            isDir[fileCount] = false;
-            fileCount++;
+        } else {
+            bool allow = false;
+            if (storageWebMode) {
+                allow = name.endsWith(".txt") || name.endsWith(".TXT") ||
+                        name.endsWith(".json") || name.endsWith(".JSON");
+            } else {
+                allow = name.endsWith(".jpg") || name.endsWith(".JPG") ||
+                        name.endsWith(".mjpg") || name.endsWith(".mjpeg") ||
+                        name.endsWith(".txt") || name.endsWith(".TXT") ||
+                        name.endsWith(".json") || name.endsWith(".JSON");
+            }
+            if (allow) {
+                fileList[fileCount] = name;
+                isDir[fileCount] = false;
+                fileCount++;
+            }
         }
         entry.close();
         entry = dir.openNextFile();
@@ -725,7 +745,7 @@ void scanSD(const char* path) {
     Serial.printf("扫描 %s : %d 个条目\n", path, fileCount);
 }
 
-// 帧解析器状态
+// 帧解析器状�?
 static uint8_t parser_state = 0;
 static size_t parser_bytesInFrame = 0;
 static bool parser_foundFF = false;
@@ -815,7 +835,7 @@ void playMJPEGFromFileBrowser(const char* filename) {
         return;
     }
 
-    Serial.printf("开始播放: %s\n", filename);
+    Serial.printf("开始播�? %s\n", filename);
     tft.fillScreen(TFT_BLACK);
     tft.setTextColor(TFT_WHITE, TFT_BLACK);
     tft.setFont(&fonts::efontCN_16);
@@ -887,7 +907,7 @@ void playMJPEGFromFileBrowser(const char* filename) {
         video_row_y = -1;
 
         if (TJpgDec.drawJpg(0, 0, jpegFrame, frameLen) != JDR_OK) {
-            Serial.println("帧解码失败");
+            Serial.println("帧解码失�?);
             continue;
         }
 
@@ -941,6 +961,81 @@ void drawFileList() {
     const int leftBtnX = (tft.width() - (2*btnW + btnGap)) / 2;
     const int rightBtnX = leftBtnX + btnW + btnGap;
 
+    if (storageWebMode) {
+        const uint16_t BG = sprite.color565(242, 245, 250);
+        const uint16_t NAV = sprite.color565(17, 24, 39);
+        const uint16_t CARD = TFT_WHITE;
+        const uint16_t SEL = sprite.color565(59, 130, 246);
+        const uint16_t SUB = sprite.color565(90, 100, 120);
+
+        sprite.fillScreen(BG);
+        sprite.fillRect(0, 0, tft.width(), 26, NAV);
+        sprite.setFont(&fonts::efontCN_16);
+        sprite.setTextColor(TFT_WHITE, NAV);
+        sprite.setCursor(6, 5);
+        sprite.print("chxnb.com");
+
+        sprite.fillRoundRect(4, 30, tft.width() - 8, 24, 6, TFT_WHITE);
+        sprite.drawRoundRect(4, 30, tft.width() - 8, 24, 6, sprite.color565(210, 214, 220));
+        sprite.setTextColor(sprite.color565(45, 55, 72), TFT_WHITE);
+        String pathLabel = currentPath;
+        if (pathLabel.length() > 34) pathLabel = "..." + pathLabel.substring(pathLabel.length() - 31);
+        sprite.setCursor(8, 35);
+        sprite.print(pathLabel);
+
+        const int listTop = 60;
+        const int rowH = 28;
+        int maxVisible = (btnY - listTop) / rowH;
+        if (maxVisible <= 0) maxVisible = 1;
+
+        if (fileCount == 0) {
+            sprite.setTextDatum(middle_center);
+            sprite.setTextColor(sprite.color565(90, 100, 120), BG);
+            sprite.drawString("No content", tft.width()/2, tft.height()/2);
+        } else {
+            for (int i = 0; i < maxVisible; i++) {
+                int idx = listScrollOffset + i;
+                if (idx >= fileCount) break;
+                int y = listTop + i * rowH;
+                bool selected = (listFocusArea == LIST_FILES && idx == fileSelectedIndex);
+
+                uint16_t cardBg = selected ? SEL : CARD;
+                uint16_t cardText = selected ? TFT_WHITE : sprite.color565(30, 41, 59);
+                sprite.fillRoundRect(6, y, tft.width() - 12, rowH - 4, 6, cardBg);
+                if (!selected) {
+                    sprite.drawRoundRect(6, y, tft.width() - 12, rowH - 4, 6, sprite.color565(225, 229, 235));
+                }
+                String marker = isDir[idx] ? "DIR " : "TXT ";
+                String displayName = marker + fileList[idx];
+                if (displayName.length() > 28) displayName = displayName.substring(0, 25) + "...";
+                sprite.setTextColor(cardText, cardBg);
+                sprite.setCursor(12, y + 5);
+                sprite.print(displayName);
+            }
+        }
+
+        sprite.setTextColor(SUB, BG);
+        sprite.setCursor(6, tft.height() - 18);
+        sprite.print("Web mode");
+
+        const char* btnLabels[2] = {"Home", "Exit"};
+        for (int i = 0; i < 2; i++) {
+            int bx = (i == 0) ? leftBtnX : rightBtnX;
+            bool btnSelected = (listFocusArea == LIST_BOTTOM_BAR && listBottomBtnIndex == i);
+            uint16_t btnColor = btnSelected ? TFT_YELLOW : TFT_DARKGREY;
+            uint16_t textCol = btnSelected ? TFT_BLACK : TFT_WHITE;
+            sprite.fillRoundRect(bx, btnY, btnW, btnH, 6, btnColor);
+            if (btnSelected) {
+                sprite.drawRoundRect(bx-2, btnY-2, btnW+4, btnH+4, 8, sprite.color565(255,200,0));
+                sprite.drawRoundRect(bx, btnY, btnW, btnH, 6, TFT_WHITE);
+            }
+            sprite.setTextColor(textCol, btnColor);
+            sprite.setTextDatum(middle_center);
+            sprite.drawString(btnLabels[i], bx + btnW/2, btnY + btnH/2);
+        }
+        return;
+    }
+
     const int lineHeight = 22;
     const int listTop = 22;
     int maxVisible = (btnY - listTop) / lineHeight;
@@ -950,7 +1045,7 @@ void drawFileList() {
         sprite.setFont(&fonts::efontCN_16);
         sprite.setTextDatum(middle_center);
         sprite.setTextColor(TFT_WHITE);
-        sprite.drawString("无文件", tft.width()/2, tft.height()/2);
+        sprite.drawString("无文�?, tft.width()/2, tft.height()/2);
     } else {
         for (int i = 0; i < maxVisible; i++) {
             int idx = listScrollOffset + i;
@@ -979,7 +1074,7 @@ void drawFileList() {
         }
     }
 
-    const char* btnLabels[2] = {"删除", "退出"};
+    const char* btnLabels[2] = {"删除", "退�?};
     for (int i = 0; i < 2; i++) {
         int bx = (i == 0) ? leftBtnX : rightBtnX;
         bool btnSelected = (listFocusArea == LIST_BOTTOM_BAR && listBottomBtnIndex == i);
@@ -1054,7 +1149,7 @@ void drawImageBottomBar() {
 
     tft.fillRect(0, btnY - 2, tft.width(), btnH + 4, TFT_BLACK);
 
-    const char* labels[2] = {"删除", "退出"};
+    const char* labels[2] = {"CN", "EN"};
     tft.setFont(&fonts::efontCN_16);
     for (int i = 0; i < 2; i++) {
         int bx = (i == 0) ? leftBtnX : rightBtnX;
@@ -1074,6 +1169,109 @@ void drawImageBottomBar() {
 }
 
 // ---------- 删除确认弹框 ----------
+bool loadTextFileForView(const char* filepath) {
+    File txtFile = SD.open(filepath, FILE_READ);
+    if (!txtFile) {
+        Serial.printf("打开文本失败: %s\n", filepath);
+        return false;
+    }
+
+    textViewLines.clear();
+    textViewTitle = String(filepath);
+    int slashPos = textViewTitle.lastIndexOf('/');
+    if (slashPos >= 0 && slashPos < (int)textViewTitle.length() - 1) {
+        textViewTitle = textViewTitle.substring(slashPos + 1);
+    }
+    textViewTopLine = 0;
+
+    size_t loadedBytes = 0;
+    while (txtFile.available() &&
+           (int)textViewLines.size() < MAX_TEXT_VIEW_LINES &&
+           loadedBytes < MAX_TEXT_VIEW_BYTES) {
+        String line = txtFile.readStringUntil('\n');
+        loadedBytes += line.length() + 1;
+        line.replace("\r", "");
+        textViewLines.push_back(line);
+    }
+    txtFile.close();
+
+    if (textViewLines.empty()) {
+        textViewLines.push_back("(empty)");
+    }
+    if ((int)textViewLines.size() >= MAX_TEXT_VIEW_LINES || loadedBytes >= MAX_TEXT_VIEW_BYTES) {
+        textViewLines.push_back("...内容较多，极速模式仅显示前半部分...");
+    }
+    Serial.printf("文本已加�? %s, %d 行\n", filepath, (int)textViewLines.size());
+    return true;
+}
+
+void drawTextViewer() {
+    if (storageWebMode) {
+        const uint16_t BG = sprite.color565(246, 248, 252);
+        const uint16_t NAV = sprite.color565(17, 24, 39);
+        sprite.fillScreen(BG);
+        sprite.setFont(&fonts::efontCN_16);
+
+        sprite.fillRect(0, 0, tft.width(), 26, NAV);
+        sprite.setTextColor(TFT_WHITE, NAV);
+        sprite.setCursor(6, 5);
+        sprite.print("chxnb.com");
+
+        sprite.fillRoundRect(4, 30, tft.width() - 8, 24, 6, TFT_WHITE);
+        sprite.drawRoundRect(4, 30, tft.width() - 8, 24, 6, sprite.color565(210, 214, 220));
+        sprite.setTextColor(sprite.color565(45, 55, 72), TFT_WHITE);
+        String title2 = textViewTitle;
+        if (title2.length() > 28) title2 = title2.substring(0, 25) + "...";
+        sprite.setCursor(8, 35);
+        sprite.print(title2);
+
+        const int topY2 = 60;
+        const int bottomY2 = tft.height() - 20;
+        const int lineH2 = 16;
+        int maxVisible2 = (bottomY2 - topY2) / lineH2;
+        if (maxVisible2 <= 0) maxVisible2 = 1;
+
+        sprite.setTextColor(sprite.color565(30, 41, 59), BG);
+        for (int i = 0; i < maxVisible2; i++) {
+            int idx = textViewTopLine + i;
+            if (idx >= (int)textViewLines.size()) break;
+            sprite.setCursor(6, topY2 + i * lineH2);
+            sprite.print(textViewLines[idx]);
+        }
+
+        sprite.setTextColor(sprite.color565(100, 116, 139), BG);
+        sprite.setCursor(6, tft.height() - 16);
+        sprite.print(String(textViewTopLine + 1) + "/" + String(textViewLines.size()) + "  SW Back");
+        return;
+    }
+
+    sprite.fillScreen(TFT_BLACK);
+    sprite.setFont(&fonts::efontCN_16);
+    sprite.setTextColor(TFT_WHITE, TFT_BLACK);
+
+    sprite.setCursor(4, 2);
+    String title = textViewTitle;
+    if (title.length() > 20) title = title.substring(0, 17) + "...";
+    sprite.print(title);
+
+    const int topY = 22;
+    const int bottomY = tft.height() - 22;
+    const int lineH = 20;
+    int maxVisible = (bottomY - topY) / lineH;
+    if (maxVisible <= 0) maxVisible = 1;
+
+    for (int i = 0; i < maxVisible; i++) {
+        int idx = textViewTopLine + i;
+        if (idx >= (int)textViewLines.size()) break;
+        sprite.setCursor(4, topY + i * lineH);
+        sprite.print(textViewLines[idx]);
+    }
+
+    sprite.setTextColor(TFT_DARKGREY, TFT_BLACK);
+    sprite.setCursor(4, tft.height() - 18);
+    sprite.print(String(textViewTopLine + 1) + "/" + String(textViewLines.size()) + "  SW返回");
+}
+
 void drawDeleteConfirm() {
     sprite.fillScreen(TFT_BLACK);
     sprite.setFont(&fonts::efontCN_16);
@@ -1083,7 +1281,7 @@ void drawDeleteConfirm() {
 
     sprite.setTextDatum(middle_center);
     sprite.setTextColor(TFT_YELLOW, sprite.color565(30, 30, 30));
-    sprite.drawString("确认删除？", tft.width() / 2, 95);
+    sprite.drawString("确认删除�?, tft.width() / 2, 95);
     sprite.setTextColor(TFT_WHITE, sprite.color565(30, 30, 30));
     sprite.drawString(fileList[fileSelectedIndex], tft.width() / 2, 120);
 
@@ -1108,12 +1306,12 @@ void drawDeleteConfirm() {
 void deleteFile(const char* filepath) {
     if (SD.exists(filepath)) {
         if (SD.remove(filepath)) {
-            Serial.printf("已删除: %s\n", filepath);
+            Serial.printf("已删�? %s\n", filepath);
         } else {
             Serial.printf("删除失败: %s\n", filepath);
         }
     } else {
-        Serial.printf("不存在: %s\n", filepath);
+        Serial.printf("不存�? %s\n", filepath);
     }
 }
 
@@ -1149,6 +1347,7 @@ void handleStorage() {
                 scanSD(currentPath.c_str());
                 if (fileSelectedIndex >= fileCount) fileSelectedIndex = fileCount - 1;
                 viewingImage = false;
+                viewingText = false;
                 listFocusArea = LIST_FILES;
                 imageFocusArea = IMAGE_AREA;
             }
@@ -1156,6 +1355,44 @@ void handleStorage() {
             deleteConfirmSelection = 0;
             screenDirty = true;
             confirmWasPressed = false;
+        }
+        return;
+    }
+
+    if (viewingText) {
+        const int lineH = 20;
+        int maxVisible = (tft.height() - 44) / lineH;
+        if (maxVisible <= 0) maxVisible = 1;
+        int maxTop = (int)textViewLines.size() - maxVisible;
+        if (maxTop < 0) maxTop = 0;
+
+        if (millis() - lastJoyTime > joyDelay) {
+            bool moved = false;
+            if (vry < 2048 - joyThreshold) {
+                if (textViewTopLine > 0) {
+                    textViewTopLine--;
+                    moved = true;
+                }
+            } else if (vry > 2048 + joyThreshold) {
+                if (textViewTopLine < maxTop) {
+                    textViewTopLine++;
+                    moved = true;
+                }
+            }
+            if (moved) {
+                lastJoyTime = millis();
+                screenDirty = true;
+            }
+        }
+
+        static bool txtWasPressed = false;
+        bool txtPressed = (digitalRead(PIN_SW) == LOW);
+        if (txtPressed && !txtWasPressed) {
+            txtWasPressed = true;
+        } else if (!txtPressed && txtWasPressed) {
+            viewingText = false;
+            screenDirty = true;
+            txtWasPressed = false;
         }
         return;
     }
@@ -1258,23 +1495,41 @@ void handleStorage() {
                             imageBottomBtnIndex = 0;
                             displaySelectedFile(fullPath.c_str(), true);
                             drawImageBottomBar();
+                        } else if (lowerName.endsWith(".txt") || lowerName.endsWith(".json")) {
+                            tft.fillScreen(TFT_BLACK);
+                            tft.setFont(&fonts::efontCN_16);
+                            tft.setTextColor(TFT_WHITE, TFT_BLACK);
+                            tft.setTextDatum(middle_center);
+                            tft.drawString("加载�?..", tft.width()/2, tft.height()/2);
+                            if (loadTextFileForView(fullPath.c_str())) {
+                                viewingText = true;
+                                screenDirty = true;
+                            }
                         } else {
                             Serial.println("不支持的文件类型");
                         }
                     }
                 } else {
                     if (listBottomBtnIndex == 0) {
-                        if (fileCount > 0 && !isDir[fileSelectedIndex] && fileList[fileSelectedIndex] != "..") {
+                        if (storageWebMode) {
+                            currentPath = SD.exists("/web") ? "/web" : "/";
+                            scanSD(currentPath.c_str());
+                            fileSelectedIndex = 0;
+                            listScrollOffset = 0;
+                            listFocusArea = LIST_FILES;
+                            screenDirty = true;
+                        } else if (fileCount > 0 && !isDir[fileSelectedIndex] && fileList[fileSelectedIndex] != "..") {
                             showDeleteConfirm = true;
                             deleteConfirmSelection = 0;
                             screenDirty = true;
                         }
                     } else {
                         viewingImage = false;
+                        viewingText = false;
                         showDeleteConfirm = false;
                         currentState = MENU;
                         screenDirty = true;
-                        Serial.println("退出存储");
+                        Serial.println("退出存�?);
                     }
                 }
             }
@@ -1363,7 +1618,7 @@ void handleStorage() {
     }
 }
 
-// ========== 初始化 ==========
+// ========== 初始�?==========
 void setup() {
     Serial.begin(115200);
     pinMode(PIN_SW, INPUT_PULLUP);
@@ -1390,7 +1645,7 @@ void setup() {
     } else {
         Serial.println("TF卡初始化成功");
         photoIndex = getNextPhotoIndex();
-        Serial.printf("下一个照片编号: %d\n", photoIndex);
+        Serial.printf("下一个照片编�? %d\n", photoIndex);
     }
 
     drawHome();
@@ -1623,7 +1878,7 @@ void handleMysteryPage() {
 }
 
 // ============================================================
-//  飞机打陨石游戏实现
+//  飞机打陨石游戏实�?
 // ============================================================
 void initGame() {
     playerX = tft.width() / 2;
@@ -1753,7 +2008,7 @@ void renderGame() {
         sprite.drawString("GAME OVER", tft.width()/2, tft.height()/2 - 30);
         sprite.setFont(&fonts::efontCN_16);
         sprite.setTextColor(TFT_WHITE, TFT_BLACK);
-        sprite.drawString("按 SW 重新开始", tft.width()/2, tft.height()/2 + 20);
+        sprite.drawString("�?SW 重新开�?, tft.width()/2, tft.height()/2 + 20);
     }
 
     sprite.pushSprite(0, 0);
@@ -1978,7 +2233,7 @@ void renderMinesweeper() {
     } else if (msGameOver) {
         sprite.printf("游戏结束");
     } else {
-        sprite.printf("雷: %d", 40);
+        sprite.printf("�? %d", 40);
     }
 
     sprite.pushSprite(0, 0);
@@ -2144,7 +2399,7 @@ void render2048() {
 }
 
 // ============================================================
-//  打砖块实现
+//  打砖块实�?
 // ============================================================
 void initBreakout() {
     brickScore = 0;
@@ -2276,7 +2531,7 @@ void renderBreakout() {
 }
 
 // ============================================================
-//  贪吃蛇实现
+//  贪吃蛇实�?
 // ============================================================
 void initSnake() {
     snakeCellSize = 16;
@@ -2414,7 +2669,7 @@ void renderSnake() {
 }
 
 // ============================================================
-//  小恐龙实现
+//  小恐龙实�?
 // ============================================================
 void initDino() {
     dinoW = 20;
@@ -2577,7 +2832,7 @@ bool loadEnglishWords() {
 
     const char* filepath = "/english/book.txt";
     if (!SD.exists(filepath)) {
-        Serial.printf("文件不存在: %s\n", filepath);
+        Serial.printf("文件不存�? %s\n", filepath);
         return false;
     }
 
@@ -2627,7 +2882,7 @@ bool loadEnglishWords() {
         englishWordCount++;
 
         if (englishWordCount % 100 == 0) {
-            Serial.printf("已解析 %d 个单词...\n", englishWordCount);
+            Serial.printf("已解�?%d 个单�?..\n", englishWordCount);
         }
     }
 
@@ -2675,7 +2930,7 @@ void drawEnglishChoose() {
     const int startX = (tft.width() - totalW) / 2;
     const int startY = (tft.height() - btnH) / 2;
 
-    const char* labels[2] = {"中文", "英文"};
+    const char* labels[2] = {"CN", "EN"};
 
     for (int i = 0; i < 2; i++) {
         int x = startX + i * (btnW + gap);
@@ -2756,7 +3011,7 @@ void drawEnglishLearn() {
                       tft.width() / 2, progressY);
 }
 
-// ========== 主循环 ==========
+// ========== 主循�?==========
 void loop() {
     // 英语选择界面
     if (currentState == ENGLISH_CHOOSE) {
@@ -2844,7 +3099,7 @@ void loop() {
         return;
     }
 
-    // 游戏状态处理
+    // 游戏状态处�?
     if (currentState == GAME_FLY) {
         handleGame();
         return;
@@ -2886,7 +3141,7 @@ void loop() {
         return;
     }
 
-    // --- 原有其他状态处理 ---
+    // --- 原有其他状态处�?---
     if (currentState == TODO_PAGE) {
         handleTodoPage();
         if (screenDirty) {
@@ -2915,7 +3170,25 @@ void loop() {
             screenDirty = true;
         }
         else if (currentState == MENU) {
-            if (selectedIndex == 1) {
+            if (selectedIndex == 0) {
+                currentState = STORAGE;
+                storageWebMode = true;
+                currentPath = SD.exists("/web") ? "/web" : "/";
+                scanSD(currentPath.c_str());
+                fileSelectedIndex = 0;
+                listScrollOffset = 0;
+                viewingImage = false;
+                viewingText = false;
+                textViewLines.clear();
+                listFocusArea = LIST_FILES;
+                listBottomBtnIndex = 0;
+                imageFocusArea = IMAGE_AREA;
+                imageBottomBtnIndex = 0;
+                showDeleteConfirm = false;
+                screenDirty = true;
+                tft.fillScreen(TFT_BLACK);
+            }
+            else if (selectedIndex == 1) {
                 currentState = CAMERA;
                 tft.fillScreen(TFT_BLACK);
                 state = WAIT_SOF;
@@ -2925,11 +3198,14 @@ void loop() {
             }
             else if (selectedIndex == 2) {
                 currentState = STORAGE;
+                storageWebMode = false;
                 currentPath = "/";
                 scanSD(currentPath.c_str());
                 fileSelectedIndex = 0;
                 listScrollOffset = 0;
                 viewingImage = false;
+                viewingText = false;
+                textViewLines.clear();
                 listFocusArea = LIST_FILES;
                 listBottomBtnIndex = 0;
                 imageFocusArea = IMAGE_AREA;
@@ -2973,6 +3249,12 @@ void loop() {
         if (showDeleteConfirm) {
             drawDeleteConfirm();
             sprite.pushSprite(0, 0);
+        } else if (viewingText) {
+            if (screenDirty) {
+                drawTextViewer();
+                sprite.pushSprite(0, 0);
+                screenDirty = false;
+            }
         } else if (!viewingImage) {
             if (screenDirty) {
                 drawFileList();
@@ -2999,3 +3281,7 @@ void loop() {
 
     delay(10);
 }
+
+
+
+
