@@ -73,6 +73,7 @@ HardwareSerial SerialCam(1);
 enum UIState { HOME, MENU, CAMERA, STORAGE,
                TODO_PAGE,
                NUM_GRID,
+               CAT_HOME,
                MYSTERY_PAGE,
                ENGLISH_CHOOSE,
                ENGLISH_LEARN,
@@ -193,6 +194,49 @@ int numGridSelectedIndex = 0;
 int passwordSequence[6];
 int passwordIndex = 0;
 
+// ========== 像素小猫家园 ==========
+#define CAT_COUNT 4
+#define CAT_ITEM_COUNT 5
+struct CatPet {
+    String name;
+    float x, y;
+    float vx, vy;
+    int mood;      // 0-100
+    int energy;    // 0-100
+    int favor;     // 0-100
+    int style;     // 0..3
+    int action;    // 0 idle, 1 walk, 2 sit, 3 jump
+    unsigned long nextActionMs;
+};
+CatPet cats[CAT_COUNT];
+int catCursorX = 120;
+int catCursorY = 120;
+int catDraggingIndex = -1;
+int catHoverIndex = -1;
+bool catPressing = false;
+unsigned long catPressStart = 0;
+int catBgIndex = 0;
+int catSelectedItem = 0;
+int catDraggingItemIndex = -1;
+String catMessage = "";
+unsigned long catMessageUntil = 0;
+const char* catItemNames[CAT_ITEM_COUNT] = {
+    u8"\u5c0f\u9c7c\u5e72",
+    u8"\u7ebf\u7403",
+    u8"\u7fbd\u6bdb\u68d2",
+    u8"\u5c0f\u94c3\u94db",
+    u8"\u732b\u8584\u8377"
+};
+String catPersonaLines[CAT_COUNT][12];
+int catPersonaCount[CAT_COUNT] = {0, 0, 0, 0};
+struct CatItem {
+    String name;
+    int x, y;
+    int homeX, homeY;
+    int kind;
+};
+CatItem catItems[CAT_ITEM_COUNT];
+
 // ========== 寰呭仛锛堢暘鑼勯挓锛?=========
 #define TODO_MAX_TASKS 32
 String todoTaskFiles[TODO_MAX_TASKS];
@@ -209,7 +253,14 @@ int todoEntrySelected = 0; // 0=寮€濮嬫柊鐨勪竴澶? 1=缁х画浠婂ぉ
 // ========== 缁佺偟锟芥﹢銆夐棃銏犲灙鐞涳拷 ==========
 int mysterySelectedIndex = 0;
 const int mysteryTotalItems = 6;
-const char* mysteryGameNames[] = { "Plane", "Minesweeper", "Breakout", "Snake", "2048", "Dino" };
+const char* mysteryGameNames[] = {
+    u8"\u98de\u673a\u5927\u6218",
+    u8"\u626b\u96f7",
+    u8"\u6253\u7816\u5757",
+    u8"\u8d2a\u5403\u86c7",
+    "2048",
+    u8"\u6050\u9f99\u8dd1\u9177"
+};
 
 // ========== 閼昏精锟斤拷鐎涳缚绡勯惄绋垮彠閸欐﹢鍣?==========
 #define MAX_WORDS 500
@@ -837,6 +888,14 @@ void handleTodoPage() {
 
 void drawNumGrid();
 void handleNumGrid();
+void initCatHome();
+void drawCatHome();
+void handleCatHome();
+void updateCatHome();
+bool loadCatPersonaFiles();
+void saveCatState();
+void appendCatLog(const String &line);
+void appendCatInteractionRecord(int idx, int itemIdx, const String &react);
 void drawMysteryPage();
 void handleMysteryPage();
 
@@ -2059,10 +2118,25 @@ void handleStorage() {
         }
 
         static bool txtWasPressed = false;
+        static unsigned long txtPressStart = 0;
         bool txtPressed = (digitalRead(PIN_SW) == LOW);
         if (txtPressed && !txtWasPressed) {
             txtWasPressed = true;
+            txtPressStart = millis();
         } else if (!txtPressed && txtWasPressed) {
+            unsigned long held = millis() - txtPressStart;
+            if (storageWebMode && held >= 5000) {
+                viewingImage = false;
+                viewingText = false;
+                viewingDayChart = false;
+                showDeleteConfirm = false;
+                currentState = NUM_GRID;
+                numGridSelectedIndex = 0;
+                passwordIndex = 0;
+                screenDirty = true;
+                txtWasPressed = false;
+                return;
+            }
             viewingText = false;
             screenDirty = true;
             txtWasPressed = false;
@@ -2157,10 +2231,25 @@ void handleStorage() {
         }
 
         static bool listWasPressed = false;
+        static unsigned long listPressStart = 0;
         bool curPressed = (digitalRead(PIN_SW) == LOW);
         if (curPressed && !listWasPressed) {
             listWasPressed = true;
+            listPressStart = millis();
         } else if (!curPressed && listWasPressed) {
+            unsigned long held = millis() - listPressStart;
+            if (storageWebMode && held >= 5000) {
+                viewingImage = false;
+                viewingText = false;
+                viewingDayChart = false;
+                showDeleteConfirm = false;
+                currentState = NUM_GRID;
+                numGridSelectedIndex = 0;
+                passwordIndex = 0;
+                screenDirty = true;
+                listWasPressed = false;
+                return;
+            }
             if (fileCount > 0 || listFocusArea == LIST_BOTTOM_BAR) {
                 if (listFocusArea == LIST_FILES) {
                     if (isDir[fileSelectedIndex]) {
@@ -2313,10 +2402,25 @@ void handleStorage() {
         }
 
         static bool imgWasPressed = false;
+        static unsigned long imgPressStart = 0;
         bool curPressed = (digitalRead(PIN_SW) == LOW);
         if (curPressed && !imgWasPressed) {
             imgWasPressed = true;
+            imgPressStart = millis();
         } else if (!curPressed && imgWasPressed) {
+            unsigned long held = millis() - imgPressStart;
+            if (storageWebMode && held >= 5000) {
+                viewingImage = false;
+                viewingText = false;
+                viewingDayChart = false;
+                showDeleteConfirm = false;
+                currentState = NUM_GRID;
+                numGridSelectedIndex = 0;
+                passwordIndex = 0;
+                screenDirty = true;
+                imgWasPressed = false;
+                return;
+            }
             if (imageFocusArea == IMAGE_AREA) {
                 viewingImage = false;
                 screenDirty = true;
@@ -2458,6 +2562,19 @@ void handleNumGrid() {
             if (passwordIndex < 6) {
                 passwordSequence[passwordIndex] = digit;
                 passwordIndex++;
+                if (passwordIndex >= 3) {
+                    int a = passwordSequence[passwordIndex - 3];
+                    int b = passwordSequence[passwordIndex - 2];
+                    int c = passwordSequence[passwordIndex - 1];
+                    if (a == 2 && b == 3 && c == 3) {
+                        currentState = CAT_HOME;
+                        initCatHome();
+                        screenDirty = true;
+                        passwordIndex = 0;
+                        wasPressed = false;
+                        return;
+                    }
+                }
                 if (passwordIndex == 6) {
                     const int correct[6] = {1, 1, 4, 5, 1, 4};
                     bool match = true;
@@ -2484,6 +2601,564 @@ void handleNumGrid() {
         sprite.pushSprite(0, 0);
         screenDirty = false;
     }
+}
+
+static bool loadOneCatPersona(int idx, const String &path) {
+    if (idx < 0 || idx >= CAT_COUNT) return false;
+    File f = SD.open(path.c_str(), FILE_READ);
+    if (!f) return false;
+    catPersonaCount[idx] = 0;
+    while (f.available() && catPersonaCount[idx] < 12) {
+        String line = f.readStringUntil('\n');
+        line.trim();
+        if (!line.length()) continue;
+        catPersonaLines[idx][catPersonaCount[idx]++] = line;
+    }
+    f.close();
+    return catPersonaCount[idx] > 0;
+}
+
+bool loadCatPersonaFiles() {
+    for (int i = 0; i < CAT_COUNT; i++) catPersonaCount[i] = 0;
+    if (!SD.exists("/cat")) return false;
+
+    bool ok0 = loadOneCatPersona(0, String(u8"/cat/\u5976\u67b3.txt"));
+    bool ok1 = loadOneCatPersona(1, String(u8"/cat/\u70ec\u66dc.txt"));
+    bool ok2 = loadOneCatPersona(2, String(u8"/cat/\u938f\u767d.txt"));
+    bool ok3 = loadOneCatPersona(3, String(u8"/cat/\u5c7f\u84dd.txt"));
+    if (ok0 && ok1 && ok2 && ok3) return true;
+
+    File dir = SD.open("/cat");
+    if (!dir || !dir.isDirectory()) {
+        if (dir) dir.close();
+        return false;
+    }
+    String names[16];
+    int n = 0;
+    File e = dir.openNextFile();
+    while (e && n < 16) {
+        if (!e.isDirectory()) {
+            String bn = todoBaseName(String(e.name()));
+            String l = bn;
+            l.toLowerCase();
+            if (l.endsWith(".txt")) names[n++] = bn;
+        }
+        e.close();
+        e = dir.openNextFile();
+    }
+    dir.close();
+    for (int i = 0; i < n - 1; i++) {
+        for (int j = i + 1; j < n; j++) {
+            if (names[j] < names[i]) {
+                String t = names[i];
+                names[i] = names[j];
+                names[j] = t;
+            }
+        }
+    }
+    for (int i = 0; i < CAT_COUNT && i < n; i++) {
+        if (catPersonaCount[i] == 0) {
+            loadOneCatPersona(i, String("/cat/") + names[i]);
+        }
+    }
+    return true;
+}
+
+void appendCatLog(const String &line) {
+    if (!SD.exists("/cat")) SD.mkdir("/cat");
+    File f = SD.open("/cat/log.txt", FILE_APPEND);
+    if (!f) return;
+    f.print(millis());
+    f.print(",");
+    f.println(line);
+    f.close();
+}
+
+static String catInteractionFilePath(int idx) {
+    if (idx < 0 || idx >= CAT_COUNT) return String("/cat/interaction.txt");
+    return String("/cat/") + cats[idx].name + u8"_互动.txt";
+}
+
+void appendCatInteractionRecord(int idx, int itemIdx, const String &react) {
+    if (idx < 0 || idx >= CAT_COUNT) return;
+    if (itemIdx < 0 || itemIdx >= CAT_ITEM_COUNT) return;
+    if (!SD.exists("/cat")) SD.mkdir("/cat");
+
+    String path = catInteractionFilePath(idx);
+    File f = SD.open(path.c_str(), FILE_APPEND);
+    if (!f) return;
+
+    unsigned long sec = millis() / 1000UL;
+    unsigned long mm = sec / 60UL;
+    unsigned long ss = sec % 60UL;
+
+    f.print(u8"运行");
+    if (mm > 0) {
+        f.print(mm);
+        f.print(u8"分");
+    }
+    f.print(ss);
+    f.print(u8"秒");
+    f.print(u8"｜互动：");
+    f.print(catItemNames[itemIdx]);
+    f.print(u8"｜心情=");
+    f.print(cats[idx].mood);
+    f.print(u8"｜体力=");
+    f.print(cats[idx].energy);
+    f.print(u8"｜亲密=");
+    f.print(cats[idx].favor);
+    f.print(u8"｜反应：");
+    f.println(react);
+    f.close();
+}
+
+void saveCatState() {
+    if (!SD.exists("/cat")) SD.mkdir("/cat");
+    if (SD.exists("/cat/state.txt")) SD.remove("/cat/state.txt");
+    File f = SD.open("/cat/state.txt", FILE_WRITE);
+    if (!f) return;
+    f.println("v=1");
+    for (int i = 0; i < CAT_COUNT; i++) {
+        f.print(i);
+        f.print(",");
+        f.print((int)cats[i].x);
+        f.print(",");
+        f.print((int)cats[i].y);
+        f.print(",");
+        f.print(cats[i].mood);
+        f.print(",");
+        f.print(cats[i].energy);
+        f.print(",");
+        f.println(cats[i].favor);
+    }
+    f.close();
+}
+
+static void loadCatStateOrDefault() {
+    const char* names[CAT_COUNT] = {
+        u8"\u5976\u67b3", u8"\u70ec\u66dc", u8"\u938f\u767d", u8"\u5c7f\u84dd"
+    };
+    for (int i = 0; i < CAT_COUNT; i++) {
+        cats[i].name = names[i];
+        cats[i].style = i;
+        cats[i].x = 38 + i * 58;
+        cats[i].y = 120;
+        cats[i].vx = (i % 2 == 0) ? 0.35f : -0.35f;
+        cats[i].vy = 0.0f;
+        cats[i].mood = 60;
+        cats[i].energy = 65;
+        cats[i].favor = 50;
+        cats[i].action = 1;
+        cats[i].nextActionMs = millis() + random(1200, 3200);
+    }
+
+    File f = SD.open("/cat/state.txt", FILE_READ);
+    if (!f) return;
+    while (f.available()) {
+        String line = f.readStringUntil('\n');
+        line.trim();
+        if (!line.length()) continue;
+        if (line.startsWith("v=")) continue;
+        int p1 = line.indexOf(',');
+        int p2 = line.indexOf(',', p1 + 1);
+        int p3 = line.indexOf(',', p2 + 1);
+        int p4 = line.indexOf(',', p3 + 1);
+        int p5 = line.indexOf(',', p4 + 1);
+        if (p1 < 0 || p2 < 0 || p3 < 0 || p4 < 0 || p5 < 0) continue;
+        int idx = line.substring(0, p1).toInt();
+        if (idx < 0 || idx >= CAT_COUNT) continue;
+        cats[idx].x = line.substring(p1 + 1, p2).toInt();
+        cats[idx].y = line.substring(p2 + 1, p3).toInt();
+        cats[idx].mood = constrain(line.substring(p3 + 1, p4).toInt(), 0, 100);
+        cats[idx].energy = constrain(line.substring(p4 + 1, p5).toInt(), 0, 100);
+        cats[idx].favor = constrain(line.substring(p5 + 1).toInt(), 0, 100);
+    }
+    f.close();
+}
+
+static void drawMiniCat(int style, int x, int y, int action) {
+    int bob = (action == 3) ? -2 : 0;
+
+    uint16_t white = TFT_WHITE;
+    uint16_t black = sprite.color565(0x2d, 0x2d, 0x2d);
+    uint16_t dark = sprite.color565(0x1a, 0x1a, 0x1a);
+    uint16_t orange = sprite.color565(0xff, 0x9f, 0x43);
+    uint16_t orange2 = sprite.color565(0xff, 0xb8, 0xb8);
+    uint16_t brown = sprite.color565(0x3d, 0x2b, 0x1f);
+    uint16_t tan = sprite.color565(0xd2, 0xb4, 0x8c);
+    uint16_t brown2 = sprite.color565(0x4b, 0x36, 0x21);
+    uint16_t cyan = sprite.color565(0x00, 0xd2, 0xff);
+    uint16_t yellow = sprite.color565(0xff, 0xd3, 0x2a);
+    uint16_t legWhite = sprite.color565(0xee, 0xee, 0xee);
+
+    auto R = [&](int rx, int ry, int rw, int rh, uint16_t c) {
+        sprite.fillRect(x + rx, y + ry + bob, rw, rh, c);
+    };
+
+    if (style == 0) {
+        R(24, 22, 4, 2, brown);
+        R(26, 24, 2, 4, brown);
+        R(8, 16, 16, 12, white);
+        R(18, 16, 6, 6, brown);
+        R(8, 22, 6, 6, orange);
+        R(6, 6, 20, 12, white);
+        R(6, 2, 6, 4, orange);
+        R(8, 4, 2, 2, orange2);
+        R(20, 2, 6, 4, sprite.color565(0x33, 0x33, 0x33));
+        R(22, 4, 2, 2, orange2);
+        R(10, 10, 3, 3, TFT_BLACK);
+        R(19, 10, 3, 3, TFT_BLACK);
+        R(15, 14, 2, 1, orange2);
+        R(9, 28, 3, 2, legWhite);
+        R(20, 28, 3, 2, legWhite);
+    } else if (style == 1) {
+        R(24, 22, 4, 2, dark);
+        R(26, 24, 2, 4, dark);
+        R(8, 16, 16, 12, black);
+        R(6, 6, 20, 12, black);
+        R(6, 2, 6, 4, black);
+        R(20, 2, 6, 4, black);
+        R(8, 4, 2, 2, orange2);
+        R(22, 4, 2, 2, orange2);
+        R(10, 10, 3, 3, yellow);
+        R(19, 10, 3, 3, yellow);
+        R(15, 14, 2, 1, orange2);
+        R(9, 28, 3, 2, dark);
+        R(20, 28, 3, 2, dark);
+    } else if (style == 2) {
+        R(24, 22, 4, 2, orange);
+        R(26, 24, 2, 4, orange);
+        R(8, 16, 16, 12, white);
+        R(8, 16, 16, 4, orange);
+        R(6, 6, 20, 12, orange);
+        R(9, 9, 14, 6, white);
+        R(6, 2, 6, 4, orange);
+        R(20, 2, 6, 4, orange);
+        R(10, 10, 3, 3, TFT_BLACK);
+        R(19, 10, 3, 3, TFT_BLACK);
+        R(15, 14, 2, 1, orange2);
+        R(9, 28, 3, 2, legWhite);
+        R(20, 28, 3, 2, legWhite);
+    } else {
+        R(24, 22, 4, 2, brown2);
+        R(26, 24, 2, 4, brown2);
+        R(8, 16, 16, 12, tan);
+        R(6, 6, 20, 12, tan);
+        R(10, 8, 12, 8, brown2);
+        R(6, 2, 6, 4, brown2);
+        R(20, 2, 6, 4, brown2);
+        R(10, 10, 3, 3, cyan);
+        R(19, 10, 3, 3, cyan);
+        R(15, 14, 2, 1, orange2);
+        R(9, 28, 3, 2, brown2);
+        R(20, 28, 3, 2, brown2);
+    }
+}
+
+static int findCatAtCursor() {
+    for (int i = 0; i < CAT_COUNT; i++) {
+        int cx = (int)cats[i].x;
+        int cy = (int)cats[i].y;
+        if (abs(catCursorX - (cx + 10)) <= 12 && abs(catCursorY - (cy + 10)) <= 12) return i;
+    }
+    return -1;
+}
+
+static int findItemAtCursor() {
+    for (int i = 0; i < CAT_ITEM_COUNT; i++) {
+        if (abs(catCursorX - catItems[i].x) <= 10 && abs(catCursorY - catItems[i].y) <= 10) return i;
+    }
+    return -1;
+}
+
+static void drawItemPixel(int kind, int x, int y) {
+    if (kind == 0) { // 小鱼干
+        uint16_t c = sprite.color565(230, 205, 150);
+        sprite.fillRect(x - 6, y - 2, 12, 4, c);
+        sprite.drawPixel(x + 6, y, c);
+        sprite.drawPixel(x - 7, y, c);
+        sprite.drawPixel(x - 3, y - 3, c);
+        sprite.drawPixel(x + 3, y + 3, c);
+    } else if (kind == 1) { // 线球
+        uint16_t c = sprite.color565(250, 110, 130);
+        sprite.fillRect(x - 5, y - 5, 10, 10, c);
+        sprite.drawLine(x - 5, y - 1, x + 5, y + 1, TFT_WHITE);
+        sprite.drawLine(x - 4, y + 4, x + 4, y - 4, TFT_WHITE);
+    } else if (kind == 2) { // 羽毛棒
+        sprite.fillRect(x - 1, y - 6, 2, 11, sprite.color565(170, 120, 70));
+        sprite.fillRect(x + 1, y - 7, 4, 4, sprite.color565(120, 220, 255));
+        sprite.fillRect(x - 5, y - 8, 4, 4, sprite.color565(120, 255, 140));
+        sprite.fillRect(x - 2, y - 10, 4, 4, sprite.color565(255, 230, 80));
+    } else if (kind == 3) { // 小铃铛
+        uint16_t c = sprite.color565(255, 225, 70);
+        sprite.fillRect(x - 5, y - 4, 10, 8, c);
+        sprite.drawPixel(x, y + 5, sprite.color565(180, 120, 10));
+        sprite.drawLine(x - 3, y - 1, x + 3, y - 1, sprite.color565(210, 170, 30));
+    } else { // 猫薄荷
+        uint16_t c = sprite.color565(90, 220, 120);
+        sprite.fillRect(x - 1, y - 6, 2, 12, sprite.color565(80, 170, 90));
+        sprite.fillRect(x - 6, y - 5, 5, 4, c);
+        sprite.fillRect(x + 1, y - 3, 5, 4, c);
+        sprite.fillRect(x - 5, y + 1, 4, 4, c);
+    }
+}
+
+static String catRandomPersonaLine(int idx) {
+    if (idx >= 0 && idx < CAT_COUNT && catPersonaCount[idx] > 0) {
+        int k = random(catPersonaCount[idx]);
+        return catPersonaLines[idx][k];
+    }
+    return u8"\u55b5~";
+}
+
+static void interactCat(int idx, int itemIdx, bool dragged) {
+    if (idx < 0 || idx >= CAT_COUNT) return;
+    if (itemIdx < 0 || itemIdx >= CAT_ITEM_COUNT) return;
+    int dm = 0, de = 0, df = 0;
+
+    if (dragged) { dm += 1; de -= 1; df += 1; }
+
+    if (cats[idx].style == 0) { // 奶枳
+        if (itemIdx == 0) { dm += 10; de += 5; df += 8; }
+        else if (itemIdx == 1) { dm += 5; de -= 2; df += 3; }
+        else if (itemIdx == 2) { dm += 2; de -= 1; df += 2; }
+        else if (itemIdx == 3) { dm -= 2; de += 3; df -= 1; }
+        else { dm += 6; de -= 2; df += 5; }
+    } else if (cats[idx].style == 1) { // 烬曜
+        if (itemIdx == 0) { dm += 4; de += 2; df += 3; }
+        else if (itemIdx == 1) { dm += 8; de -= 3; df += 6; }
+        else if (itemIdx == 2) { dm += 3; de -= 2; df += 2; }
+        else if (itemIdx == 3) { dm -= 5; de += 4; df -= 3; }
+        else { dm += 1; de -= 1; df += 1; }
+    } else if (cats[idx].style == 2) { // 鎏白
+        if (itemIdx == 0) { dm += 5; de += 4; df += 4; }
+        else if (itemIdx == 1) { dm += 10; de -= 4; df += 8; }
+        else if (itemIdx == 2) { dm += 9; de -= 3; df += 7; }
+        else if (itemIdx == 3) { dm += 3; de += 2; df += 2; }
+        else { dm += 7; de -= 2; df += 5; }
+    } else { // 屿蓝
+        if (itemIdx == 0) { dm += 7; de += 3; df += 6; }
+        else if (itemIdx == 1) { dm += 4; de -= 1; df += 3; }
+        else if (itemIdx == 2) { dm += 2; de -= 1; df += 2; }
+        else if (itemIdx == 3) { dm -= 3; de += 2; df -= 2; }
+        else { dm += 9; de -= 2; df += 8; }
+    }
+
+    cats[idx].mood = constrain(cats[idx].mood + dm, 0, 100);
+    cats[idx].energy = constrain(cats[idx].energy + de, 0, 100);
+    cats[idx].favor = constrain(cats[idx].favor + df, 0, 100);
+    cats[idx].action = random(0, 4);
+    cats[idx].nextActionMs = millis() + random(1000, 2500);
+
+    String react = catRandomPersonaLine(idx);
+    catMessage = cats[idx].name + u8"\uff1a" + react;
+    catMessageUntil = millis() + 2600;
+
+    String logLine = cats[idx].name + "," + catItemNames[itemIdx] +
+                     ",mood=" + String(cats[idx].mood) +
+                     ",energy=" + String(cats[idx].energy) +
+                     ",favor=" + String(cats[idx].favor);
+    appendCatLog(logLine);
+    appendCatInteractionRecord(idx, itemIdx, react);
+    saveCatState();
+}
+
+void initCatHome() {
+    catCursorX = tft.width() / 2;
+    catCursorY = 120;
+    catDraggingIndex = -1;
+    catHoverIndex = -1;
+    catPressing = false;
+    catPressStart = 0;
+    catBgIndex = 0;
+    catSelectedItem = 0;
+    catDraggingItemIndex = -1;
+    catMessage = "";
+    catMessageUntil = 0;
+    for (int i = 0; i < CAT_ITEM_COUNT; i++) {
+        catItems[i].name = catItemNames[i];
+        catItems[i].kind = i;
+        catItems[i].homeX = 38 + i * 48;
+        catItems[i].homeY = 222;
+        catItems[i].x = catItems[i].homeX;
+        catItems[i].y = catItems[i].homeY;
+    }
+    loadCatStateOrDefault();
+    loadCatPersonaFiles();
+    screenDirty = true;
+}
+
+void updateCatHome() {
+    unsigned long now = millis();
+    for (int i = 0; i < CAT_COUNT; i++) {
+        if (i == catDraggingIndex) continue;
+        if (now >= cats[i].nextActionMs) {
+            cats[i].action = random(0, 4);
+            if (cats[i].action == 0) {
+                cats[i].vx = 0.0f; cats[i].vy = 0.0f;
+            } else if (cats[i].action == 1) {
+                cats[i].vx = ((random(0, 200) - 100) / 180.0f);
+                cats[i].vy = ((random(0, 200) - 100) / 250.0f);
+            } else if (cats[i].action == 2) {
+                cats[i].vx = 0.0f; cats[i].vy = 0.0f;
+            } else {
+                cats[i].vx = ((random(0, 200) - 100) / 220.0f);
+                cats[i].vy = -0.35f;
+            }
+            cats[i].nextActionMs = now + random(1200, 4200);
+        }
+
+        cats[i].x += cats[i].vx;
+        cats[i].y += cats[i].vy;
+        if (cats[i].action == 3) cats[i].vy += 0.03f;
+        if (cats[i].x < 10) { cats[i].x = 10; cats[i].vx = fabs(cats[i].vx); }
+        if (cats[i].x > tft.width() - 30) { cats[i].x = tft.width() - 30; cats[i].vx = -fabs(cats[i].vx); }
+        if (cats[i].y < 32) { cats[i].y = 32; cats[i].vy = fabs(cats[i].vy); }
+        if (cats[i].y > 172) { cats[i].y = 172; cats[i].vy = -fabs(cats[i].vy) * 0.4f; }
+    }
+}
+
+void drawCatHome() {
+    uint16_t sky = sprite.color565(197, 229, 248);
+    uint16_t ground = sprite.color565(185, 220, 165);
+    if (catBgIndex == 1) { sky = sprite.color565(255, 233, 206); ground = sprite.color565(229, 203, 167); }
+    if (catBgIndex == 2) { sky = sprite.color565(188, 216, 255); ground = sprite.color565(170, 195, 235); }
+    sprite.fillRect(0, 0, tft.width(), 208, sky);
+    sprite.fillRect(0, 164, tft.width(), 36, ground);
+    sprite.fillRoundRect(8, 202, tft.width() - 16, 34, 8, sprite.color565(28, 31, 34));
+    sprite.drawRoundRect(8, 202, tft.width() - 16, 34, 8, sprite.color565(70, 76, 82));
+
+    // 左侧弱提示箭头（切背景）
+    uint16_t arrowCol = sprite.color565(150, 165, 170);
+    sprite.drawLine(4, 112, 10, 106, arrowCol);
+    sprite.drawLine(4, 112, 10, 118, arrowCol);
+    sprite.drawLine(4, 112, 11, 112, arrowCol);
+
+    sprite.setFont(&fonts::efontCN_16);
+    sprite.setTextColor(TFT_WHITE, TFT_BLACK);
+    sprite.setTextDatum(top_left);
+    sprite.setCursor(14, 206);
+    sprite.print(u8"\u7269\u54c1:");
+
+    int itemW = 48;
+    int startX = 34;
+    const char* itemShortNames[CAT_ITEM_COUNT] = {
+        u8"\u9c7c\u5e72",
+        u8"\u7ebf\u7403",
+        u8"\u7fbd\u68d2",
+        u8"\u94c3\u94db",
+        u8"\u8584\u8377"
+    };
+    for (int i = 0; i < CAT_ITEM_COUNT; i++) {
+        int x = startX + i * itemW;
+        bool sel = (i == catSelectedItem);
+        uint16_t bg = sel ? sprite.color565(255, 213, 79) : sprite.color565(50, 55, 60);
+        uint16_t tc = sel ? TFT_BLACK : TFT_LIGHTGREY;
+        sprite.fillRoundRect(x, 206, 38, 26, 6, bg);
+        if (i != catDraggingItemIndex) {
+            drawItemPixel(catItems[i].kind, catItems[i].x, catItems[i].y);
+        }
+        if (sel) {
+            sprite.setTextColor(tc, bg);
+            sprite.setCursor(x + 14, 221);
+            sprite.print(i + 1);
+        }
+        sprite.setTextColor(sel ? TFT_BLACK : TFT_WHITE, bg);
+        sprite.setCursor(x + 5, 219);
+        sprite.print(itemShortNames[i]);
+    }
+
+    for (int i = 0; i < CAT_COUNT; i++) {
+        drawMiniCat(cats[i].style, (int)cats[i].x, (int)cats[i].y, cats[i].action);
+    }
+
+    if (catDraggingItemIndex >= 0) {
+        drawItemPixel(catItems[catDraggingItemIndex].kind,
+                      catItems[catDraggingItemIndex].x,
+                      catItems[catDraggingItemIndex].y);
+    }
+
+    // 更醒目的红色光标
+    uint16_t rc = TFT_RED;
+    uint16_t rl = sprite.color565(255, 170, 170);
+    sprite.drawPixel(catCursorX, catCursorY, rc);
+    sprite.drawPixel(catCursorX - 1, catCursorY, rc);
+    sprite.drawPixel(catCursorX + 1, catCursorY, rc);
+    sprite.drawPixel(catCursorX, catCursorY - 1, rc);
+    sprite.drawPixel(catCursorX, catCursorY + 1, rc);
+    sprite.drawPixel(catCursorX - 2, catCursorY, rc);
+    sprite.drawPixel(catCursorX + 2, catCursorY, rc);
+    sprite.drawPixel(catCursorX, catCursorY - 2, rc);
+    sprite.drawPixel(catCursorX, catCursorY + 2, rc);
+    sprite.drawPixel(catCursorX - 3, catCursorY, rl);
+    sprite.drawPixel(catCursorX + 3, catCursorY, rl);
+    sprite.drawPixel(catCursorX, catCursorY - 3, rl);
+    sprite.drawPixel(catCursorX, catCursorY + 3, rl);
+}
+
+void handleCatHome() {
+    static unsigned long lastMove = 0;
+    unsigned long now = millis();
+
+    if (now - lastMove > 22) {
+        int vrx = analogRead(PIN_VRX);
+        int vry = analogRead(PIN_VRY);
+        int dx = 0, dy = 0;
+        if (vrx < 2048 - joyThreshold) dx = -2;
+        else if (vrx > 2048 + joyThreshold) dx = 2;
+        if (vry < 2048 - joyThreshold) dy = -2;
+        else if (vry > 2048 + joyThreshold) dy = 2;
+        catCursorX = constrain(catCursorX + dx, 0, tft.width() - 1);
+        catCursorY = constrain(catCursorY + dy, 0, tft.height() - 1);
+        lastMove = now;
+    }
+
+    bool sw = (digitalRead(PIN_SW) == LOW);
+    if (sw && !catPressing) {
+        catPressing = true;
+    } else if (!sw && catPressing) {
+        catPressStart = now;
+        if (catDraggingItemIndex >= 0) {
+            int hit = findCatAtCursor();
+            if (hit >= 0) interactCat(hit, catDraggingItemIndex, true);
+            catItems[catDraggingItemIndex].x = catItems[catDraggingItemIndex].homeX;
+            catItems[catDraggingItemIndex].y = catItems[catDraggingItemIndex].homeY;
+            catDraggingItemIndex = -1;
+        } else if (catDraggingIndex >= 0) {
+            saveCatState();
+            catDraggingIndex = -1;
+        } else {
+            int itemHit = findItemAtCursor();
+            int catHit = findCatAtCursor();
+            if (catCursorX <= 12 && catCursorY >= 100 && catCursorY <= 124) {
+                catBgIndex = (catBgIndex + 1) % 3;
+            } else if (itemHit >= 0) {
+                catDraggingItemIndex = itemHit;
+                catSelectedItem = itemHit;
+            } else if (catHit >= 0) {
+                catDraggingIndex = catHit;
+            } else if (catCursorY >= 202) {
+                int slot = (catCursorX - 34) / 48;
+                if (slot >= 0 && slot < CAT_ITEM_COUNT) catSelectedItem = slot;
+            }
+        }
+        catPressing = false;
+    }
+
+    if (catDraggingIndex >= 0) {
+        cats[catDraggingIndex].x = constrain(catCursorX - 10, 10, tft.width() - 30);
+        cats[catDraggingIndex].y = constrain(catCursorY - 10, 28, 172);
+        cats[catDraggingIndex].vx = 0;
+        cats[catDraggingIndex].vy = 0;
+    }
+    if (catDraggingItemIndex >= 0) {
+        catItems[catDraggingItemIndex].x = catCursorX;
+        catItems[catDraggingItemIndex].y = catCursorY;
+    }
+
+    updateCatHome();
+    drawCatHome();
+    sprite.pushSprite(0, 0);
 }
 
 // ========== 缁佺偟锟芥﹢銆夐棃锟介敍鍫熺埗閹村繐鍨悰锟介敍锟?==========
@@ -2913,11 +3588,11 @@ void renderMinesweeper() {
     sprite.setTextColor(TFT_WHITE, TFT_BLACK);
     sprite.setCursor(5, 5);
     if (msWin) {
-        sprite.printf("娴ｇ姾鑰芥禍鍡磼");
+        sprite.print(u8"\u626b\u96f7\u80dc\u5229");
     } else if (msGameOver) {
-        sprite.printf("濞撳憡鍨欑紒鎾存将");
+        sprite.print(u8"\u626b\u96f7\u5931\u8d25");
     } else {
-        sprite.printf("闂? %d", 40);
+        sprite.print(u8"\u96f7: 40");
     }
 
     sprite.pushSprite(0, 0);
@@ -3838,6 +4513,11 @@ void loop() {
     }
     if (currentState == NUM_GRID) {
         handleNumGrid();
+        delay(10);
+        return;
+    }
+    if (currentState == CAT_HOME) {
+        handleCatHome();
         delay(10);
         return;
     }
